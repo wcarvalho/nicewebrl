@@ -6,6 +6,9 @@ setup(
     packages=find_packages(),
     install_requires=[
         "nicegui",
+        "tortoise-orm",
+        "jax",
+        "Pillow",
     ],
     author="Wilka Carvalho",
     author_email="wcarvalho92@gmail.com",

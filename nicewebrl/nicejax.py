@@ -1,16 +1,16 @@
-import random
-from nicegui import app, ui
 from typing import Union
-from base64 import b64encode
+from typing import get_type_hints
+from base64 import b64encode, b64decode
+from flax import struct
+from flax import serialization
+import io
 import inspect
 import jax.numpy as jnp
 import jax.random
 import numpy as np
-from flax import struct
-from typing import get_type_hints
-import io
+import random
+from nicegui import app, ui
 from PIL import Image
-
 
 def init_rng():
     """Initializes a jax.random number generator or gets the latest if already initialized."""
@@ -100,10 +100,20 @@ def deserialize(cls: struct.PyTreeNode, data: dict):
                     kwargs[key] = value
             else:
                 kwargs[key] = value
+        import ipdb; ipdb.set_trace()
         return cls(**kwargs)
 
     raise ValueError(f"Unable to deserialize {data} into {cls}")
 
+
+def deserialize_bytes(
+        cls: struct.PyTreeNode,
+        encoded_data: bytes,
+):
+    data_bytes = b64decode(encoded_data)
+    deserialized_tree = serialization.from_bytes(
+        None, data_bytes)
+    return deserialize(cls, deserialized_tree)
 
 def base64_nparray(image: np.ndarray):
     image = np.asarray(image)
@@ -112,56 +122,9 @@ def base64_nparray(image: np.ndarray):
     encoded_image = b64encode(buffer.getvalue()).decode('ascii')
     return 'data:image/jpeg;base64,' + encoded_image
 
-
-
-
-
-
-
-
-
-
-
-
-
-def default_timestep_output(
-        stage,
-        timestep):
-    state_image = stage.render_fn(timestep, stage.env_params)
-    processed_image = base64_nparray(state_image)
-    return processed_image
-
-
-def default_evaluate_success(timestep):
-    return int(timestep.reward > .8)
-
-
 class JaxWebEnv:
-
-    def __init__(
-            self,
-            env,
-            action_to_key = None,
-            #timestep_output_fn=None,
-            #evaluate_success_fn=None,
-            #task_name_fn=None
-    ):
+    def __init__(self, env):
         self.env = env
-        self.action_to_key = action_to_key
-
-        #timestep = None
-
-        #if timestep_output_fn is None:
-        #    timestep_output_fn = default_timestep_output
-        #self.timestep_output = timestep_output_fn
-
-        #if evaluate_success_fn is None:
-        #    evaluate_success_fn = default_evaluate_success
-        #self.evaluate_success = evaluate_success_fn
-
-        #if task_name_fn is None:
-        #    def task_name_fn(*args, **kwargs): 'task'
-        #self.task_name = task_name_fn
 
         def next_step(rng, timestep, action, env_params):
           return env.step(
@@ -180,11 +143,6 @@ class JaxWebEnv:
 
         self.reset = jax.jit(self.env.reset)
         self.next_steps = jax.jit(next_steps)
-
-    #def reset(self, rng, env_params):
-    #    timestep = self.env.reset(rng, env_params)
-
-    #    return timestep
 
     def step(self, action_key, env_params, rng):
         action = self.keyparser.action(action_key)
