@@ -1,0 +1,7 @@
+nicegui
+tortoise-orm
+Pillow
+jax>=0.4.16
+distrax>=0.1.5
+flax==0.8.2
+numpy==1.26.4

@@ -1,5 +1,5 @@
 import typing
-from typing import Union
+from typing import Union, Any
 from typing import get_type_hints
 from base64 import b64encode, b64decode
 from flax import struct
@@ -43,12 +43,12 @@ def new_rng():
         return rng_key
 
 
-def cast_match(example, data):
+def cast_match(example: struct.PyTreeNode, data: struct.PyTreeNode):
     def cast_match_(ex, d):
         return jax.numpy.array(d, dtype=ex.dtype)
     return jax.tree_map(cast_match_, example, data)
 
-def make_serializable(obj: Union[struct.PyTreeNode, jnp.ndarray, np.ndarray]):
+def make_serializable(obj: Any):
     """Convert nested jax objects to serializable python objects"""
     if isinstance(obj, np.ndarray):
       return obj.tolist()  # Convert JAX array to list
@@ -76,7 +76,10 @@ def deserialize(cls: struct.PyTreeNode, data: dict):
     if isinstance(data, str):
         return data
     elif isinstance(data, int):
-        return jnp.array(data, dtype=jnp.int32)
+        try:
+            return jnp.array(data, dtype=jnp.int32)
+        except OverflowError:
+            return jnp.array(data, dtype=jnp.uint32)
     elif isinstance(data, float):
         return jnp.array(data, dtype=jnp.float32)
     elif isinstance(data, bool):
@@ -129,9 +132,10 @@ def deserialize(cls: struct.PyTreeNode, data: dict):
 
                 elif field_type == jnp.ndarray:
                     # Convert dict to list if it's a 1D array
-                    if isinstance(value, dict) and all(k.isdigit() for k in value.keys()):
-                        value = [value[str(i)] for i in range(len(value))]
-                    kwargs[key] = jnp.array(value)
+                    raise NotImplementedError
+                    #if isinstance(value, dict) and all(k.isdigit() for k in value.keys()):
+                    #    value = [value[str(i)] for i in range(len(value))]
+                    #kwargs[key] = jnp.array(value)
                 else:
                     kwargs[key] = value
             else:

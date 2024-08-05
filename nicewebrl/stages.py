@@ -1,4 +1,5 @@
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, Optional
+import dataclasses
 import base64
 
 from flax import struct
@@ -40,6 +41,17 @@ async def get_latest_stage_state(cls: struct.PyTreeNode) -> StageStateModel | No
         return deserialized
     return latest
 
+async def save_stage_state(stage_state):
+    stage_state = jax.tree_map(make_serializable, stage_state)
+    serialized_data = serialization.to_bytes(stage_state)
+    encoded_data = base64.b64encode(serialized_data).decode('ascii')
+    model = StageStateModel(
+        session_id=app.storage.browser['id'],
+        stage_idx=app.storage.user['stage_idx'],
+        data=encoded_data,
+    )
+    await model.save()
+
 @struct.dataclass
 class StageState:
     finished: bool = False
@@ -51,14 +63,27 @@ class EnvStageState(StageState):
     nepisodes: int = 0
     nsuccesses: int = 0
 
-@struct.dataclass
+@dataclasses.dataclass
 class Stage:
     name: str = 'stage'
     state_cls: StageState = StageState
 
-    def load(self, container: ui.element): pass
+    def run(self, container: ui.element): pass
 
-@struct.dataclass
+    def __post_init__(self):
+        self.user_data = {}
+
+    def get_user_data(self, key, value=None):
+        user_seed = app.storage.user['seed']
+        self.user_data[user_seed] = self.user_data.get(user_seed, {})
+        return self.user_data[user_seed].get(key, value)
+
+    def set_user_data(self, **kwargs):
+        user_seed = app.storage.user['seed']
+        self.user_data[user_seed] = self.user_data.get(user_seed, {})
+        self.user_data[user_seed].update(kwargs)
+
+@dataclasses.dataclass
 class EnvStage(Stage):
     instruction: str = 'instruction'
     web_env: Any = None
@@ -66,8 +91,9 @@ class EnvStage(Stage):
     env_params: struct.PyTreeNode = None
     reset_env: bool = True
     render_fn: Callable = None
-    vmap_render_fn: Callable = None
+    multi_render_fn: Callable = None
     task_desc_fn: Callable = None
+    evaluate_success_fn: Callable = lambda t: 0
     state_cls: StageState = None
 
     def restart_env(self):
@@ -85,7 +111,8 @@ class EnvStage(Stage):
             container.clear()
             ui.markdown(f"# {self.name}")
             ui.markdown(f"### {self.instruction}")
-            self.task_desc_fn(timestep)
+            if self.task_desc_fn is not None:
+                self.task_desc_fn(timestep)
             ui.html(make_image_html(src=image))
             ui.run_javascript("window.imageSeenTime = new Date();")
             # ui.html(make_image_html(src=''))
@@ -102,37 +129,72 @@ class EnvStage(Stage):
         rng = new_rng()
         next_timesteps = self.web_env.next_steps(
             rng, timestep, self.env_params)
-        next_images = self.vmap_render_fn(next_timesteps)
+        next_images = self.multi_render_fn(next_timesteps)
         next_images = {
             self.action_to_key[idx]: base64_nparray(image) for idx, image in enumerate(next_images)}
         js_code = f"window.next_states = {next_images};"
         ui.run_javascript(js_code)
+        return next_timesteps
 
     async def start_stage(self, container: ui.element):
         timestep = self.restart_env()
-        self.send_timestep_to_client(container, timestep)
+        next_timesteps = self.send_timestep_to_client(container, timestep)
         stage_state = self.state_cls(timestep=timestep)
-        stage_state = jax.tree_map(make_serializable, stage_state)
-        serialized_data = serialization.to_bytes(stage_state)
-        encoded_data = base64.b64encode(serialized_data).decode('ascii')
-        model = StageStateModel(
-            session_id=app.storage.browser['id'],
-            stage_idx=app.storage.user['stage_idx'],
-            data=encoded_data,
+        await save_stage_state(stage_state)
+        self.set_user_data(
+            timestep=timestep,
+            next_timesteps=next_timesteps,
+            stage_state=stage_state,
         )
-        await model.save()
 
-    def load_stage(self, container: ui.element, state: StageState):
+    def load_stage(self, container: ui.element, stage_state: StageState):
         dummy_timestep = self.restart_env()
         timestep = nicejax.cast_match(
-            example=dummy_timestep, data=state.timestep)
-        self.send_timestep_to_client(container, timestep)
+            example=dummy_timestep, data=stage_state.timestep)
+        next_timesteps = self.send_timestep_to_client(container, timestep)
+        self.set_user_data(
+            timestep=timestep,
+            next_timesteps=next_timesteps,
+            stage_state=stage_state,
+        )
 
-    async def load(self,
-             container: ui.element,
-             state: StageState = None,
-             ):
-        if state is None:
-            return await self.start_stage(container)
+    async def run(self, container: ui.element):
+
+        # (potentially) load stage state from memory
+        stage_state = await get_latest_stage_state(
+            cls=self.state_cls)
+
+        if stage_state is None:
+            await self.start_stage(container)
         else:
-            return self.load_stage(container, state)
+            self.load_stage(container, stage_state)
+
+        async def handle_key_press(e):
+            key = e.args['key']
+            keydownTime = e.args['keydownTime']
+            imageSeenTime = e.args['imageSeenTime']
+            key_to_action = {k: a for a, k in self.action_to_key.items()}
+            action_idx = key_to_action[key]
+
+            next_timesteps = self.get_user_data('next_timesteps')
+            timestep = jax.tree_map(lambda t: t[action_idx], next_timesteps)
+            next_timesteps = self.send_timestep_to_client(container, timestep)
+            success = self.evaluate_success_fn(timestep)
+
+            stage_state = self.get_user_data('stage_state')
+            stage_state = stage_state.replace(
+                timestep=timestep,
+                nsteps=stage_state.nsteps + 1,
+                nepisodes=stage_state.nepisodes + timestep.last(),
+                nsuccesses=stage_state.nepisodes + success,
+            )
+            await save_stage_state(stage_state)
+            self.set_user_data(
+                timestep=timestep,
+                next_timesteps=next_timesteps,
+                stage_state=stage_state,
+                keydownTime=keydownTime,
+                imageSeenTime=imageSeenTime,
+            )
+
+        ui.on('key_pressed', handle_key_press)
