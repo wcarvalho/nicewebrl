@@ -1,3 +1,4 @@
+import typing
 from typing import Union
 from typing import get_type_hints
 from base64 import b64encode, b64decode
@@ -41,6 +42,12 @@ def new_rng():
         app.storage.user['rng_key'] = rng_key.tolist()
         return rng_key
 
+
+def cast_match(example, data):
+    def cast_match_(ex, d):
+        return jax.numpy.array(d, dtype=ex.dtype)
+    return jax.tree_map(cast_match_, example, data)
+
 def make_serializable(obj: Union[struct.PyTreeNode, jnp.ndarray, np.ndarray]):
     """Convert nested jax objects to serializable python objects"""
     if isinstance(obj, np.ndarray):
@@ -66,8 +73,14 @@ def deserialize(cls: struct.PyTreeNode, data: dict):
     Returns:
     An instance of cls with deserialized data
     """
-    if isinstance(data, (str, int, float, bool)):
+    if isinstance(data, str):
         return data
+    elif isinstance(data, int):
+        return jnp.array(data, dtype=jnp.int32)
+    elif isinstance(data, float):
+        return jnp.array(data, dtype=jnp.float32)
+    elif isinstance(data, bool):
+        return jnp.array(data, dtype=jnp.bool_)
 
     if isinstance(data, jnp.ndarray):
         return data
@@ -76,10 +89,22 @@ def deserialize(cls: struct.PyTreeNode, data: dict):
         return [deserialize(cls, item) for item in data]
 
     if cls == jnp.ndarray:
-        if isinstance(data, dict) and all(k.isdigit() for k in data.keys()):
-          return jnp.array([data[str(i)] for i in range(len(data))])
+        is_dict = isinstance(data, dict)
+        integer_keys = all(k.isdigit() for k in data.keys())
+        #number_values = all(
+            #isinstance(v, (int, float)) for v in data.values())
+        if is_dict and integer_keys:
+          array = [deserialize(cls, data[str(i)]) for i in range(len(data))]
+          try:
+            return jnp.array(array)
+          except OverflowError:
+                if isinstance(data['0'], int):
+                    return jnp.array(array, dtype=jnp.uint32)
+                else:
+                    raise RuntimeError("how to handle?")
         else:
-            raise NotImplementedError(type(data))
+            raise RuntimeError("malformed numpy array?")
+
 
     if isinstance(data, dict):
         hints = get_type_hints(cls)
@@ -87,8 +112,19 @@ def deserialize(cls: struct.PyTreeNode, data: dict):
         for key, value in data.items():
             if key in hints:
                 field_type = hints[key]
-                if inspect.isclass(field_type) and (
-                        issubclass(field_type, struct.PyTreeNode) or hasattr(field_type, '__annotations__')):
+                # Check if the field_type is Optional
+                if typing.get_origin(field_type) is typing.Union and type(None) in typing.get_args(field_type):
+                    # It's an Optional type
+                    if value is None:
+                        kwargs[key] = None
+                    else:
+                        # Get the type inside Optional
+                        inner_type = next(t for t in typing.get_args(
+                            field_type) if t is not type(None))
+                        kwargs[key] = deserialize(inner_type, value)
+                elif inspect.isclass(field_type) and (
+                        issubclass(field_type, struct.PyTreeNode) 
+                        or hasattr(field_type, '__annotations__')):
                     kwargs[key] = deserialize(field_type, value)
 
                 elif field_type == jnp.ndarray:
@@ -100,11 +136,9 @@ def deserialize(cls: struct.PyTreeNode, data: dict):
                     kwargs[key] = value
             else:
                 kwargs[key] = value
-        import ipdb; ipdb.set_trace()
         return cls(**kwargs)
 
     raise ValueError(f"Unable to deserialize {data} into {cls}")
-
 
 def deserialize_bytes(
         cls: struct.PyTreeNode,
@@ -113,7 +147,8 @@ def deserialize_bytes(
     data_bytes = b64decode(encoded_data)
     deserialized_tree = serialization.from_bytes(
         None, data_bytes)
-    return deserialize(cls, deserialized_tree)
+    deserialized = deserialize(cls, deserialized_tree)
+    return deserialized
 
 def base64_nparray(image: np.ndarray):
     image = np.asarray(image)

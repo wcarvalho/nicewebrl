@@ -36,7 +36,8 @@ async def get_latest_stage_state(cls: struct.PyTreeNode) -> StageStateModel | No
     ).order_by('-id').first()
 
     if latest is not None:
-        latest = nicejax.deserialize_bytes(cls, latest)
+        deserialized = nicejax.deserialize_bytes(cls, latest.data)
+        return deserialized
     return latest
 
 @struct.dataclass
@@ -69,12 +70,15 @@ class EnvStage(Stage):
     task_desc_fn: Callable = None
     state_cls: StageState = None
 
-    def restart_env(self, container: ui.element):
+    def restart_env(self):
         rng = new_rng()
         #############################
         # get current image and display it
         #############################
         timestep = self.web_env.reset(rng, self.env_params)
+        return timestep
+
+    def send_timestep_to_client(self, container, timestep):
         image = self.render_fn(timestep)
         image = base64_nparray(image)
         with container.style('align-items: center;'):
@@ -84,13 +88,12 @@ class EnvStage(Stage):
             self.task_desc_fn(timestep)
             ui.html(make_image_html(src=image))
             ui.run_javascript("window.imageSeenTime = new Date();")
-            #ui.html(make_image_html(src=''))
-            #js = f"document.getElementById('stateImage').src={image};"
-            #js += "\nwindow.imageSeenTime = new Date();"
-            #print(js)
-            ## for accurate times
-            #ui.run_javascript(js)
-
+            # ui.html(make_image_html(src=''))
+            # js = f"document.getElementById('stateImage').src={image};"
+            # js += "\nwindow.imageSeenTime = new Date();"
+            # print(js)
+            # for accurate times
+            # ui.run_javascript(js)
 
         #############################
         # get next images and store them client-side
@@ -105,28 +108,31 @@ class EnvStage(Stage):
         js_code = f"window.next_states = {next_images};"
         ui.run_javascript(js_code)
 
-        return timestep
-
     async def start_stage(self, container: ui.element):
-        timestep = self.restart_env(container)
+        timestep = self.restart_env()
+        self.send_timestep_to_client(container, timestep)
         stage_state = self.state_cls(timestep=timestep)
         stage_state = jax.tree_map(make_serializable, stage_state)
         serialized_data = serialization.to_bytes(stage_state)
         encoded_data = base64.b64encode(serialized_data).decode('ascii')
-        #serialized_data_str = serialized_data.decode('utf-8')
         model = StageStateModel(
             session_id=app.storage.browser['id'],
             stage_idx=app.storage.user['stage_idx'],
             data=encoded_data,
         )
         await model.save()
-        nicejax.deserialize_bytes(self.state_cls, encoded_data)
+
+    def load_stage(self, container: ui.element, state: StageState):
+        dummy_timestep = self.restart_env()
+        timestep = nicejax.cast_match(
+            example=dummy_timestep, data=state.timestep)
+        self.send_timestep_to_client(container, timestep)
 
     async def load(self,
              container: ui.element,
              state: StageState = None,
              ):
-        #if state is None:
-        return await self.start_stage(container)
-        #else:
-        #    import ipdb; ipdb.set_trace()
+        if state is None:
+            return await self.start_stage(container)
+        else:
+            return self.load_stage(container, state)
