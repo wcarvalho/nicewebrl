@@ -62,7 +62,7 @@ def make_serializable(obj: Any):
     else:
         return obj
 
-def deserialize(cls: struct.PyTreeNode, data: dict):
+def deserialize(cls: struct.PyTreeNode, data: Any):
     """
     Automatically deserialize data into the given class.
     
@@ -108,7 +108,6 @@ def deserialize(cls: struct.PyTreeNode, data: dict):
         else:
             raise RuntimeError("malformed numpy array?")
 
-
     if isinstance(data, dict):
         hints = get_type_hints(cls)
         kwargs = {}
@@ -130,12 +129,6 @@ def deserialize(cls: struct.PyTreeNode, data: dict):
                         or hasattr(field_type, '__annotations__')):
                     kwargs[key] = deserialize(field_type, value)
 
-                elif field_type == jnp.ndarray:
-                    # Convert dict to list if it's a 1D array
-                    raise NotImplementedError
-                    #if isinstance(value, dict) and all(k.isdigit() for k in value.keys()):
-                    #    value = [value[str(i)] for i in range(len(value))]
-                    #kwargs[key] = jnp.array(value)
                 else:
                     kwargs[key] = value
             else:
@@ -154,7 +147,7 @@ def deserialize_bytes(
     deserialized = deserialize(cls, deserialized_tree)
     return deserialized
 
-def base64_nparray(image: np.ndarray):
+def base64_npimage(image: np.ndarray):
     image = np.asarray(image)
     buffer = io.BytesIO()
     Image.fromarray(image.astype('uint8')).save(buffer, format="JPEG")
@@ -165,10 +158,6 @@ class JaxWebEnv:
     def __init__(self, env):
         self.env = env
 
-        def next_step(rng, timestep, action, env_params):
-          return env.step(
-              rng, timestep, action, env_params)
-
         num_actions = env.num_actions()
         def next_steps(rng, timestep, env_params):
             actions = jnp.arange(num_actions)
@@ -176,16 +165,9 @@ class JaxWebEnv:
 
             # vmap over rngs and actions. re-use timestep
             timesteps = jax.vmap(
-                next_step, in_axes=(0, None, 0, None), out_axes=0
+                env.step, in_axes=(0, None, 0, None), out_axes=0
             )(rngs, timestep, actions, env_params)
             return timesteps
 
         self.reset = jax.jit(self.env.reset)
         self.next_steps = jax.jit(next_steps)
-
-    def step(self, action_key, env_params, rng):
-        action = self.keyparser.action(action_key)
-        timestep = self.env.step(
-            rng, timestep, action, env_params)
-
-        return timestep

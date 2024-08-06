@@ -26,7 +26,7 @@ document.addEventListener('DOMContentLoaded', async function () {
       next_state = window.next_states[event.key];
       var imgElement = document.getElementById('stateImage')
       imgElement.src = next_state;
-
+      console.log('set new image')
       // Record the current time when the keydown event occurs
       var keydownTime = new Date();
       // Emit the keydown event with the latest times

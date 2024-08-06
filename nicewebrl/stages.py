@@ -1,4 +1,5 @@
 from typing import Any, Callable, Dict, Optional
+import time
 import dataclasses
 import base64
 
@@ -9,7 +10,7 @@ import jax.numpy as jnp
 
 from nicegui import app, ui
 from nicewebrl import nicejax
-from nicewebrl.nicejax import new_rng, base64_nparray, make_serializable
+from nicewebrl.nicejax import new_rng, base64_npimage, make_serializable
 from tortoise import fields, models
 
 
@@ -54,11 +55,7 @@ async def save_stage_state(stage_state):
 
 
 @struct.dataclass
-class StageState:
-    finished: bool = False
-
-@struct.dataclass
-class EnvStageState(StageState):
+class EnvStageState:
     timestep: struct.PyTreeNode = None
     nsteps: int = 0
     nepisodes: int = 0
@@ -68,10 +65,9 @@ class EnvStageState(StageState):
 class Stage:
     name: str = 'stage'
     body: str = 'stage'
-    state_cls: StageState = StageState
+    has_buttons: bool = True
     display_fn: Callable = None
-
-    def run(self, container: ui.element): pass
+    finished: bool = False
 
     def __post_init__(self):
         self.user_data = {}
@@ -86,19 +82,30 @@ class Stage:
         self.user_data[user_seed] = self.user_data.get(user_seed, {})
         self.user_data[user_seed].update(kwargs)
 
+    async def run(self, container: ui.element):
+        self.display_fn(stage=self, container=container)
+        button = ui.button('Next page')
+        self.set_user_data(button=button)
+
+    async def handle_button_press(self):
+        self.set_user_data(finished=True)
+
+    async def handle_key_press(self, e, container): pass
+
 @dataclasses.dataclass
 class EnvStage(Stage):
     instruction: str = 'instruction'
     max_episodes: Optional[int] = 10
     min_success: Optional[int] = 1
     web_env: Any = None
+    has_buttons: bool = False
     action_to_key: Dict[int, str] = None
     env_params: struct.PyTreeNode = None
     reset_env: bool = True
     render_fn: Callable = None
     multi_render_fn: Callable = None
     evaluate_success_fn: Callable = lambda t: 0
-    state_cls: StageState = None
+    state_cls: EnvStageState = None
 
     def __post_init__(self):
         super().__post_init__()
@@ -113,6 +120,7 @@ class EnvStage(Stage):
         return timestep
 
     def send_timestep_to_client(self, container, timestep):
+        start = time.time()
         #############################
         # get next images and store them client-side
         # setup code to display next wind
@@ -122,12 +130,10 @@ class EnvStage(Stage):
             rng, timestep, self.env_params)
         next_images = self.multi_render_fn(next_timesteps)
         next_images = {
-            self.action_to_key[idx]: base64_nparray(image) for idx, image in enumerate(next_images)}
+            self.action_to_key[idx]: base64_npimage(image) for idx, image in enumerate(next_images)}
         js_code = f"window.next_states = {next_images};"
         ui.run_javascript(js_code)
-        self.set_user_data(
-            next_timesteps=next_timesteps,
-        )
+        self.set_user_data(next_timesteps=next_timesteps)
         #############################
         # display image
         #############################
@@ -136,6 +142,8 @@ class EnvStage(Stage):
             container=container,
             timestep=timestep)
         ui.run_javascript("window.imageSeenTime = new Date();")
+        end = time.time()
+        print("send_timestep_to_client:", end-start)
 
     async def start_stage(self, container: ui.element):
         timestep = self.restart_env()
@@ -145,9 +153,11 @@ class EnvStage(Stage):
             stage_state=stage_state,
         )
         await save_stage_state(stage_state)
+        print('-'*10)
+        print('start_stage')
         self.send_timestep_to_client(container, timestep)
 
-    def load_stage(self, container: ui.element, stage_state: StageState):
+    def load_stage(self, container: ui.element, stage_state: EnvStageState):
         dummy_timestep = self.restart_env()
         timestep = nicejax.cast_match(
             example=dummy_timestep, data=stage_state.timestep)
@@ -155,11 +165,24 @@ class EnvStage(Stage):
             stage_state=stage_state.replace(
                 timestep=timestep),
         )
+        print('-'*10)
+        print('load_stage')
         self.send_timestep_to_client(container, timestep)
 
-    async def handle_key_press(self, container, e):
+    async def run(self, container: ui.element):
+        # (potentially) load stage state from memory
+        stage_state = await get_latest_stage_state(
+            cls=self.state_cls)
+
+        if stage_state is None:
+            await self.start_stage(container)
+        else:
+            self.load_stage(container, stage_state)
+
+    async def handle_key_press(self, e, container):
         stage_state = self.get_user_data('stage_state')
-        if stage_state.finished: return
+        if self.get_user_data('finished', False): return
+
         key = e.args['key']
         keydownTime = e.args['keydownTime']
         imageSeenTime = e.args['imageSeenTime']
@@ -169,6 +192,8 @@ class EnvStage(Stage):
         next_timesteps = self.get_user_data('next_timesteps')
         timestep = jax.tree_map(
             lambda t: t[action_idx], next_timesteps)
+        print('-'*10)
+        print('handle_key_press')
         self.send_timestep_to_client(container, timestep)
         success = self.evaluate_success_fn(timestep)
 
@@ -191,38 +216,20 @@ class EnvStage(Stage):
         ################
         if timestep.last():
             if success:
-                ui.notify('success',
-                          type='positive',
-                          position='center',
-                          timeout=50,
+                ui.notify(
+                    'success', type='positive', position='center',
+                    timeout=10,
                           )
             else:
-                ui.notify('failure',
-                          type='negative',
-                          position='center',
-                          timeout=50)
+                ui.notify(
+                    'failure', type='negative', position='center',
+                    timeout=10)
 
         ################
         # Stage over?
         ################
         achieved_min_success = stage_state.nsuccesses >= self.min_success
         achieved_max_episodes = stage_state.nepisodes >= self.max_episodes
+        stage_finished = achieved_min_success or achieved_max_episodes
+        self.set_user_data(finished=stage_finished)
 
-        go_to_next_stage = achieved_min_success or achieved_max_episodes
-        stage_state = stage_state.replace(
-            finished=go_to_next_stage)
-        self.set_user_data(stage_state=stage_state)
-
-
-    async def run(self, container: ui.element):
-        # (potentially) load stage state from memory
-        stage_state = await get_latest_stage_state(
-            cls=self.state_cls)
-
-        if stage_state is None:
-            await self.start_stage(container)
-        else:
-            self.load_stage(container, stage_state)
-
-        ui.on('key_pressed', 
-              lambda e: self.handle_key_press(container, e))
