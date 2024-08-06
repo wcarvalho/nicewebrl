@@ -16,6 +16,14 @@ pip install -r requirements.tx
 
 ### Jax environments
 
+<style>
+  .env-image {
+    height: 200px; /* You can adjust this value as needed */
+    width: 100%;
+    object-fit: contain;
+    background-color: #f0f0f0; /* Light gray background for image containers */
+  }
+</style>
 <table style="width:100%; border-collapse: collapse;">
   <tr>
     <td style="border: 1px solid black; padding: 10px; text-align: center;">
@@ -23,7 +31,7 @@ pip install -r requirements.tx
         <strong>Craftax</strong>
       </a><br>
       <a href="https://github.com/MichaelTMatthews/Craftax" target="_blank">
-        <img src="https://raw.githubusercontent.com/MichaelTMatthews/Craftax/main/images/building.gif" alt="Craftax" style="width: 100%; max-width: 400px;">
+        <img src="https://raw.githubusercontent.com/MichaelTMatthews/Craftax/main/images/building.gif" alt="Craftax" class="env-image">
       </a>
     </td>
     <td style="border: 1px solid black; padding: 10px; text-align: center;">
@@ -31,7 +39,7 @@ pip install -r requirements.tx
         <strong>Housemaze</strong>
       </a><br>
       <a href="https://github.com/wcarvalho/JaxHouseMaze" target="_blank">
-        <img src="https://github.com/wcarvalho/JaxHouseMaze/raw/main/example.png" alt="Housemaze" style="width: 100%; max-width: 400px;">
+        <img src="https://github.com/wcarvalho/JaxHouseMaze/raw/main/example.png" alt="Housemaze" class="env-image">
       </a>
     </td>
     <td style="border: 1px solid black; padding: 10px; text-align: center;">
@@ -39,7 +47,7 @@ pip install -r requirements.tx
         <strong>XLand-Minigrid</strong>
       </a><br>
       <a href="https://github.com/corl-team/xland-minigrid" target="_blank">
-        <img src="https://github.com/corl-team/xland-minigrid/blob/main/figures/ruleset-example.jpg?raw=true" alt="XLand-Minigrid" style="width: 100%; max-width: 400px;">
+        <img src="https://github.com/corl-team/xland-minigrid/blob/main/figures/ruleset-example.jpg?raw=true" alt="XLand-Minigrid" class="env-image">
       </a>
     </td>
   </tr>
@@ -49,7 +57,7 @@ pip install -r requirements.tx
         <strong>Navix (Jax minigrid)</strong>
       </a><br>
       <a href="https://github.com/epignatelli/navix" target="_blank">
-        <img src="https://minigrid.farama.org/_images/GoToObjectEnv.gif" alt="Navix" style="width: 100%; max-width: 400px;">
+        <img src="https://minigrid.farama.org/_images/GoToObjectEnv.gif" alt="Navix" class="env-image">
       </a>
     </td>
     <td style="border: 1px solid black; padding: 10px; text-align: center;">
@@ -57,7 +65,7 @@ pip install -r requirements.tx
         <strong>Overcooked (multi-agent)</strong>
       </a><br>
       <a href="https://github.com/FLAIROx/JaxMARL" target="_blank">
-        <img src="https://github.com/FLAIROx/JaxMARL/blob/main/docs/imgs/cramped_room.gif?raw=true" alt="Overcooked" style="width: 100%; max-width: 400px;">
+        <img src="https://github.com/FLAIROx/JaxMARL/blob/main/docs/imgs/cramped_room.gif?raw=true" alt="Overcooked" class="env-image">
       </a>
     </td>
     <td style="border: 1px solid black; padding: 10px; text-align: center;">
@@ -65,9 +73,8 @@ pip install -r requirements.tx
         <strong>STORM: Spatial-Temporal Matrix Games (multi-agent)</strong>
       </a><br>
       <a href="https://github.com/FLAIROx/JaxMARL" target="_blank">
-        <img src="https://github.com/FLAIROx/JaxMARL/blob/main/docs/imgs/storm.gif?raw=true" alt="STORM" style="width: 100%; max-width: 400px;">
+        <img src="https://github.com/FLAIROx/JaxMARL/blob/main/docs/imgs/storm.gif?raw=true" alt="STORM" class="env-image">
       </a>
     </td>
   </tr>
 </table>
-

@@ -53,32 +53,6 @@ async def save_stage_state(stage_state):
     await model.save()
 
 
-async def update_stage_on_keypress(e, container, stages):
-    """Default behavior for progressing through stages."""
-    if app.storage.user['stage_idx'] >= len(stages):
-        finish_experiment(container)
-        return 
-
-    stage = stages[app.storage.user['stage_idx']]
-    stage_state = stage.get_user_data('stage_state')
-    stage_finished = stage_state.finished
-    if stage_finished:
-        app.storage.user['stage_idx'] += 1
-    stage_idx = app.storage.user['stage_idx']
-    container.clear()
-    if stage_idx < len(stages):
-        stage = stages[app.storage.user['stage_idx']]
-        await stage.run(container)
-    else:
-        finish_experiment(container)
-
-def finish_experiment(container):
-    app.storage.user['experiment_finished'] = app.storage.user.get('experiment_finished', True)
-    with container:
-        container.clear()
-        ui.markdown(f"# Experiment over. You may close the browser")
-
-
 @struct.dataclass
 class StageState:
     finished: bool = False
