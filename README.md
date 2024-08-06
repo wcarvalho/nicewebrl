@@ -37,7 +37,7 @@ When targetting normative solutions, one may want to study algorithms asymptotic
       <a href="https://github.com/wcarvalho/JaxHouseMaze" target="_blank">
         <img src="https://github.com/wcarvalho/JaxHouseMaze/raw/main/example.png" alt="Housemaze" style="width: 100%; max-width: 400px;">
       </a>
-      <p>This is a maze environment that supports navigation to multiple objects. The entire maze can be described with a string, making it really easy to create new mazes.</p>
+      <p>This is a maze environment where new mazes can be easily be described with a string.</p>
     </td>
     <td style="border: 1px solid black; padding: 10px; text-align: center;">
       <a href="https://github.com/corl-team/xland-minigrid" target="_blank" style="text-decoration: none; color: inherit;">
@@ -75,7 +75,7 @@ When targetting normative solutions, one may want to study algorithms asymptotic
       <a href="https://github.com/FLAIROx/JaxMARL" target="_blank">
         <img src="https://github.com/FLAIROx/JaxMARL/blob/main/docs/imgs/storm.gif?raw=true" alt="STORM" style="width: 100%; max-width: 400px;">
       </a>
-      <p>This is a popular multi-agent environment.</p>
+      <p>This environment specifies Matrix games represented as grid world scenarios.</p>
     </td>
   </tr>
 </table>
