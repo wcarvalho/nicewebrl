@@ -62,7 +62,7 @@ pip install -r requirements.tx
     </td>
     <td style="border: 1px solid black; padding: 10px; text-align: center;">
       <a href="https://github.com/FLAIROx/JaxMARL" target="_blank" style="text-decoration: none; color: inherit;">
-        <strong>STORM: Spatial-Temporal Matrix Games (multi-agent)</strong>
+        <strong>STORM (multi-agent)</strong>
       </a><br>
       <a href="https://github.com/FLAIROx/JaxMARL" target="_blank">
         <img src="https://github.com/FLAIROx/JaxMARL/blob/main/docs/imgs/storm.gif?raw=true" alt="STORM" style="width: 100%; max-width: 400px;">
