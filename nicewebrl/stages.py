@@ -30,6 +30,19 @@ class StageStateModel(models.Model):
     class Meta:
         table = "stage"
 
+class ExperimentData(models.Model):
+    id = fields.IntField(primary_key=True)
+    session_id = fields.CharField(max_length=255, index=True)
+    stage_idx = fields.IntField(index=True)
+    image_seen_time = fields.TextField()
+    action_taken_time = fields.TextField()
+    computer_interaction = fields.TextField()
+    action_name = fields.TextField()
+    action_idx = fields.IntField(index=True)
+    data = fields.TextField()
+
+    class Meta:
+        table = "experiment"
 
 async def get_latest_stage_state(cls: struct.PyTreeNode) -> StageStateModel | None:
     latest = await StageStateModel.filter(
@@ -53,7 +66,6 @@ async def save_stage_state(stage_state):
     )
     await model.save()
 
-
 @struct.dataclass
 class EnvStageState:
     timestep: struct.PyTreeNode = None
@@ -65,7 +77,6 @@ class EnvStageState:
 class Stage:
     name: str = 'stage'
     body: str = 'stage'
-    has_buttons: bool = True
     display_fn: Callable = None
     finished: bool = False
 
@@ -98,28 +109,21 @@ class EnvStage(Stage):
     max_episodes: Optional[int] = 10
     min_success: Optional[int] = 1
     web_env: Any = None
-    has_buttons: bool = False
-    action_to_key: Dict[int, str] = None
     env_params: struct.PyTreeNode = None
-    reset_env: bool = True
     render_fn: Callable = None
-    multi_render_fn: Callable = None
     evaluate_success_fn: Callable = lambda t: 0
     state_cls: EnvStageState = None
+    action_to_key: Dict[int, str] = None
+    action_to_name: Dict[int, str] = None
 
     def __post_init__(self):
         super().__post_init__()
         self.multi_render_fn = jax.jit(jax.vmap(self.render_fn))
+        self.key_to_action = {k: a for a, k in self.action_to_key.items()}
+        if self.action_to_name is None:
+            self.action_to_name = dict()
 
-    def restart_env(self):
-        rng = new_rng()
-        #############################
-        # get current image and display it
-        #############################
-        timestep = self.web_env.reset(rng, self.env_params)
-        return timestep
-
-    def send_timestep_to_client(self, container, timestep):
+    def step_and_send_timestep(self, container, timestep):
         start = time.time()
         #############################
         # get next images and store them client-side
@@ -133,6 +137,9 @@ class EnvStage(Stage):
             self.action_to_key[idx]: base64_npimage(image) for idx, image in enumerate(next_images)}
         js_code = f"window.next_states = {next_images};"
         ui.run_javascript(js_code)
+        end = time.time()
+        print("run_javascript:", end-start)
+        start = time.time()
         self.set_user_data(next_timesteps=next_timesteps)
         #############################
         # display image
@@ -143,10 +150,11 @@ class EnvStage(Stage):
             timestep=timestep)
         ui.run_javascript("window.imageSeenTime = new Date();")
         end = time.time()
-        print("send_timestep_to_client:", end-start)
+        print("step_and_send_timestep:", end-start)
 
     async def start_stage(self, container: ui.element):
-        timestep = self.restart_env()
+        rng = new_rng()
+        timestep = self.web_env.reset(rng, self.env_params)
         stage_state = self.state_cls(timestep=timestep)
         self.set_user_data(
             #timestep=timestep,
@@ -155,19 +163,20 @@ class EnvStage(Stage):
         await save_stage_state(stage_state)
         print('-'*10)
         print('start_stage')
-        self.send_timestep_to_client(container, timestep)
+        self.step_and_send_timestep(container, timestep)
 
     def load_stage(self, container: ui.element, stage_state: EnvStageState):
-        dummy_timestep = self.restart_env()
-        timestep = nicejax.cast_match(
-            example=dummy_timestep, data=stage_state.timestep)
+        rng = new_rng()
+        timestep = nicejax.match_types(
+            example=self.web_env.reset(rng, self.env_params),
+            data=stage_state.timestep)
         self.set_user_data(
             stage_state=stage_state.replace(
                 timestep=timestep),
         )
         print('-'*10)
         print('load_stage')
-        self.send_timestep_to_client(container, timestep)
+        self.step_and_send_timestep(container, timestep)
 
     async def run(self, container: ui.element):
         # (potentially) load stage state from memory
@@ -179,24 +188,58 @@ class EnvStage(Stage):
         else:
             self.load_stage(container, stage_state)
 
-    async def handle_key_press(self, e, container):
-        stage_state = self.get_user_data('stage_state')
+
+    async def save_experiment_data(self, javascript_inputs):
+
+        key = javascript_inputs.args['key']
+        keydownTime = javascript_inputs.args['keydownTime']
+        imageSeenTime = javascript_inputs.args['imageSeenTime']
+        action_idx = self.key_to_action[key]
+        action_name = self.action_to_name.get(action_idx)
+
+        timestep = self.get_user_data('stage_state').timestep
+        timestep = jax.tree_map(make_serializable, timestep)
+        serialized_timestep = serialization.to_bytes(timestep)
+        encoded_timestep = base64.b64encode(
+            serialized_timestep).decode('ascii')
+
+        model = ExperimentData(
+            session_id=app.storage.browser['id'],
+            stage_idx=app.storage.user['stage_idx'],
+            image_seen_time=imageSeenTime,
+            action_taken_time=keydownTime,
+            computer_interaction=key,
+            action_name=action_name,
+            action_idx=action_idx,
+            data=encoded_timestep,
+        )
+
+        await model.save()
+
+    async def handle_key_press(
+            self,
+            javascript_inputs,
+            container):
         if self.get_user_data('finished', False): return
 
-        key = e.args['key']
-        keydownTime = e.args['keydownTime']
-        imageSeenTime = e.args['imageSeenTime']
-        key_to_action = {k: a for a, k in self.action_to_key.items()}
-        action_idx = key_to_action[key]
+        key = javascript_inputs.args['key']
+        # check if valid environment interaction
+        if not key in self.key_to_action: return
 
+        # save experiment data so far
+        await self.save_experiment_data(javascript_inputs)
+
+        # use action to select from avaialble next time-steps
+        action_idx = self.key_to_action[key]
         next_timesteps = self.get_user_data('next_timesteps')
         timestep = jax.tree_map(
             lambda t: t[action_idx], next_timesteps)
         print('-'*10)
         print('handle_key_press')
-        self.send_timestep_to_client(container, timestep)
+        self.step_and_send_timestep(container, timestep)
         success = self.evaluate_success_fn(timestep)
 
+        stage_state = self.get_user_data('stage_state')
         stage_state = stage_state.replace(
             timestep=timestep,
             nsteps=stage_state.nsteps + 1,
@@ -208,8 +251,8 @@ class EnvStage(Stage):
             #timestep=timestep,
             #next_timesteps=next_timesteps,
             stage_state=stage_state,
-            keydownTime=keydownTime,
-            imageSeenTime=imageSeenTime,
+            #keydownTime=keydownTime,
+            #imageSeenTime=imageSeenTime,
         )
         ################
         # Episode over?

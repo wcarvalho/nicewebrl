@@ -11,9 +11,10 @@ def basic_javascript_file():
   return file
 
 
-def initialize_user():
+def initialize_user(debug: bool = False):
+    default_seed = 42 if debug else random.getrandbits(32)
     app.storage.user['seed'] = app.storage.user.get(
-        'seed', random.getrandbits(32))
+        'seed', default_seed)
     app.storage.user['rng_splits'] = app.storage.user.get('rng_splits', 0)
     app.storage.user['stage_idx'] = app.storage.user.get('stage_idx', 0)
     if 'rng_key' not in app.storage.user:

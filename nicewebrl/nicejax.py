@@ -43,10 +43,10 @@ def new_rng():
         return rng_key
 
 
-def cast_match(example: struct.PyTreeNode, data: struct.PyTreeNode):
-    def cast_match_(ex, d):
+def match_types(example: struct.PyTreeNode, data: struct.PyTreeNode):
+    def match_types_(ex, d):
         return jax.numpy.array(d, dtype=ex.dtype)
-    return jax.tree_map(cast_match_, example, data)
+    return jax.tree_map(match_types_, example, data)
 
 def make_serializable(obj: Any):
     """Convert nested jax objects to serializable python objects"""
