@@ -3,6 +3,7 @@ import jax.numpy as jnp
 from nicegui import app
 import os.path
 import random
+from datetime import datetime
 
 def basic_javascript_file():
   current_file_path = os.path.abspath(__file__)
@@ -20,3 +21,14 @@ def initialize_user(debug: bool = False):
     if 'rng_key' not in app.storage.user:
         rng_key = jax.random.PRNGKey(app.storage.user['seed'])
         app.storage.user['rng_key'] = rng_key.tolist()
+    app.storage.user['session_start'] = datetime.now()
+    app.storage.user['session_duration'] = 0
+
+
+def get_user_session_minutes():
+    start_time = app.storage.user['session_start']
+    current_time = datetime.now()
+    duration = current_time - start_time
+    minutes_passed = duration.total_seconds() / 60
+    app.storage.user['session_duration'] = minutes_passed
+    return minutes_passed

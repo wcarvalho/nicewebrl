@@ -1,3 +1,4 @@
+import time
 import typing
 from typing import Union, Any
 from typing import get_type_hints
@@ -171,3 +172,30 @@ class JaxWebEnv:
 
         self.reset = jax.jit(self.env.reset)
         self.next_steps = jax.jit(next_steps)
+
+    def precompile(self, dummy_env_params):
+        """Call this function to pre-compile jax functions before experiment starts."""
+        print("Compiling jax environment functions.")
+        start = time.time()
+        dummy_rng = jax.random.PRNGKey(0)
+        self.reset = self.reset.lower(dummy_rng, dummy_env_params).compile()
+        timestep = self.reset(dummy_rng, dummy_env_params)
+        self.next_steps = self.next_steps.lower(dummy_rng, timestep, dummy_env_params).compile()
+        print("\tcompilation time:", time.time()-start)
+
+    def precompile_vmap_render_fn(
+            self,
+            render_fn,
+            dummy_env_params):
+        """Call this function to pre-compile a multi-render function before experiment starts."""
+        print("Compiling multi-render function.")
+        start = time.time()
+        vmap_render_fn = jax.jit(jax.vmap(render_fn))
+        dummy_rng = jax.random.PRNGKey(0)
+        timestep = self.reset(dummy_rng, dummy_env_params)
+        next_timesteps = self.next_steps(
+            dummy_rng, timestep, dummy_env_params)
+        vmap_render_fn = vmap_render_fn.lower(
+            next_timesteps).compile()
+        print("\tcompilation time:", time.time()-start)
+        return vmap_render_fn

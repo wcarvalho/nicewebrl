@@ -111,6 +111,7 @@ class EnvStage(Stage):
     web_env: Any = None
     env_params: struct.PyTreeNode = None
     render_fn: Callable = None
+    vmap_render_fn: Callable = None
     evaluate_success_fn: Callable = lambda t: 0
     state_cls: EnvStageState = None
     action_to_key: Dict[int, str] = None
@@ -118,7 +119,10 @@ class EnvStage(Stage):
 
     def __post_init__(self):
         super().__post_init__()
-        self.multi_render_fn = jax.jit(jax.vmap(self.render_fn))
+        if self.vmap_render_fn is None:
+            self.vmap_render_fn = self.web_env.precompile_vmap_render_fn(
+                self.render_fn, self.env_params)
+
         self.key_to_action = {k: a for a, k in self.action_to_key.items()}
         if self.action_to_name is None:
             self.action_to_name = dict()
@@ -132,14 +136,16 @@ class EnvStage(Stage):
         rng = new_rng()
         next_timesteps = self.web_env.next_steps(
             rng, timestep, self.env_params)
-        next_images = self.multi_render_fn(next_timesteps)
+        print("- next_steps:", time.time()-start)
+        start = time.time()
+        next_images = self.vmap_render_fn(next_timesteps)
+
         next_images = {
             self.action_to_key[idx]: base64_npimage(image) for idx, image in enumerate(next_images)}
+
         js_code = f"window.next_states = {next_images};"
         ui.run_javascript(js_code)
-        end = time.time()
-        print("run_javascript:", end-start)
-        start = time.time()
+
         self.set_user_data(next_timesteps=next_timesteps)
         #############################
         # display image
@@ -149,8 +155,7 @@ class EnvStage(Stage):
             container=container,
             timestep=timestep)
         ui.run_javascript("window.imageSeenTime = new Date();")
-        end = time.time()
-        print("step_and_send_timestep:", end-start)
+
 
     async def start_stage(self, container: ui.element):
         rng = new_rng()
@@ -162,7 +167,7 @@ class EnvStage(Stage):
         )
         await save_stage_state(stage_state)
         print('-'*10)
-        print('start_stage')
+        print(f'{self.name}. start_stage')
         self.step_and_send_timestep(container, timestep)
 
     def load_stage(self, container: ui.element, stage_state: EnvStageState):
@@ -175,7 +180,7 @@ class EnvStage(Stage):
                 timestep=timestep),
         )
         print('-'*10)
-        print('load_stage')
+        print(f'{self.name}. load_stage')
         self.step_and_send_timestep(container, timestep)
 
     async def run(self, container: ui.element):
@@ -235,7 +240,7 @@ class EnvStage(Stage):
         timestep = jax.tree_map(
             lambda t: t[action_idx], next_timesteps)
         print('-'*10)
-        print('handle_key_press')
+        print(f'{self.name}. handle_key_press')
         self.step_and_send_timestep(container, timestep)
         success = self.evaluate_success_fn(timestep)
 
@@ -247,13 +252,8 @@ class EnvStage(Stage):
             nsuccesses=stage_state.nsuccesses + success,
         )
         await save_stage_state(stage_state)
-        self.set_user_data(
-            #timestep=timestep,
-            #next_timesteps=next_timesteps,
-            stage_state=stage_state,
-            #keydownTime=keydownTime,
-            #imageSeenTime=imageSeenTime,
-        )
+        self.set_user_data(stage_state=stage_state)
+
         ################
         # Episode over?
         ################
