@@ -21,12 +21,14 @@ def initialize_user(debug: bool = False):
     if 'rng_key' not in app.storage.user:
         rng_key = jax.random.PRNGKey(app.storage.user['seed'])
         app.storage.user['rng_key'] = rng_key.tolist()
-    app.storage.user['session_start'] = datetime.now()
+    app.storage.user['session_start'] = app.storage.user.get(
+        'session_start',
+        datetime.now().isoformat())
     app.storage.user['session_duration'] = 0
 
 
 def get_user_session_minutes():
-    start_time = app.storage.user['session_start']
+    start_time = datetime.fromisoformat(app.storage.user['session_start'])
     current_time = datetime.now()
     duration = current_time - start_time
     minutes_passed = duration.total_seconds() / 60

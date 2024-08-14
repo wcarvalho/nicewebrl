@@ -1,6 +1,6 @@
 import time
 import typing
-from typing import Union, Any
+from typing import Union, Any, Callable
 from typing import get_type_hints
 from base64 import b64encode, b64decode
 from flax import struct
@@ -13,6 +13,9 @@ import numpy as np
 import random
 from nicegui import app, ui
 from PIL import Image
+
+Timestep = Any
+RenderFn = Callable[[Timestep], jax.Array]
 
 def init_rng():
     """Initializes a jax.random number generator or gets the latest if already initialized."""
@@ -158,6 +161,8 @@ def base64_npimage(image: np.ndarray):
 class JaxWebEnv:
     def __init__(self, env):
         self.env = env
+        assert hasattr(env, 'reset'), 'env needs reset function'
+        assert hasattr(env, 'step'), 'env needs step function'
 
         num_actions = env.num_actions()
         def next_steps(rng, timestep, env_params):
@@ -173,7 +178,7 @@ class JaxWebEnv:
         self.reset = jax.jit(self.env.reset)
         self.next_steps = jax.jit(next_steps)
 
-    def precompile(self, dummy_env_params):
+    def precompile(self, dummy_env_params: struct.PyTreeNode) -> None:
         """Call this function to pre-compile jax functions before experiment starts."""
         print("Compiling jax environment functions.")
         start = time.time()
@@ -181,12 +186,12 @@ class JaxWebEnv:
         self.reset = self.reset.lower(dummy_rng, dummy_env_params).compile()
         timestep = self.reset(dummy_rng, dummy_env_params)
         self.next_steps = self.next_steps.lower(dummy_rng, timestep, dummy_env_params).compile()
-        print("\tcompilation time:", time.time()-start)
+        print("\ttime:", time.time()-start)
 
     def precompile_vmap_render_fn(
             self,
-            render_fn,
-            dummy_env_params):
+            render_fn: RenderFn,
+            dummy_env_params: struct.PyTreeNode) -> RenderFn:
         """Call this function to pre-compile a multi-render function before experiment starts."""
         print("Compiling multi-render function.")
         start = time.time()
@@ -197,5 +202,5 @@ class JaxWebEnv:
             dummy_rng, timestep, dummy_env_params)
         vmap_render_fn = vmap_render_fn.lower(
             next_timesteps).compile()
-        print("\tcompilation time:", time.time()-start)
+        print("\ttime:", time.time()-start)
         return vmap_render_fn

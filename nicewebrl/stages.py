@@ -79,6 +79,7 @@ class Stage:
     body: str = 'stage'
     display_fn: Callable = None
     finished: bool = False
+    next_button: bool = True
 
     def __post_init__(self):
         self.user_data = {}
@@ -93,10 +94,13 @@ class Stage:
         self.user_data[user_seed] = self.user_data.get(user_seed, {})
         self.user_data[user_seed].update(kwargs)
 
-    async def run(self, container: ui.element):
+    async def activate(self, container: ui.element):
         self.display_fn(stage=self, container=container)
-        button = ui.button('Next page')
-        self.set_user_data(button=button)
+        #button = ui.button('Next page')
+        #self.set_user_data(button=button)
+        #print(f'{self.name} user data:')
+        #from pprint import pprint
+        #pprint(self.user_data)
 
     async def handle_button_press(self):
         self.set_user_data(finished=True)
@@ -116,6 +120,7 @@ class EnvStage(Stage):
     state_cls: EnvStageState = None
     action_to_key: Dict[int, str] = None
     action_to_name: Dict[int, str] = None
+    next_button: bool = False
 
     def __post_init__(self):
         super().__post_init__()
@@ -128,7 +133,6 @@ class EnvStage(Stage):
             self.action_to_name = dict()
 
     def step_and_send_timestep(self, container, timestep):
-        start = time.time()
         #############################
         # get next images and store them client-side
         # setup code to display next wind
@@ -136,7 +140,6 @@ class EnvStage(Stage):
         rng = new_rng()
         next_timesteps = self.web_env.next_steps(
             rng, timestep, self.env_params)
-        print("- next_steps:", time.time()-start)
         start = time.time()
         next_images = self.vmap_render_fn(next_timesteps)
 
@@ -166,8 +169,6 @@ class EnvStage(Stage):
             stage_state=stage_state,
         )
         await save_stage_state(stage_state)
-        print('-'*10)
-        print(f'{self.name}. start_stage')
         self.step_and_send_timestep(container, timestep)
 
     def load_stage(self, container: ui.element, stage_state: EnvStageState):
@@ -179,11 +180,11 @@ class EnvStage(Stage):
             stage_state=stage_state.replace(
                 timestep=timestep),
         )
-        print('-'*10)
-        print(f'{self.name}. load_stage')
+        #print('-'*10)
+        #print(f'{self.name}. load_stage')
         self.step_and_send_timestep(container, timestep)
 
-    async def run(self, container: ui.element):
+    async def activate(self, container: ui.element):
         # (potentially) load stage state from memory
         stage_state = await get_latest_stage_state(
             cls=self.state_cls)
@@ -225,6 +226,10 @@ class EnvStage(Stage):
             self,
             javascript_inputs,
             container):
+        stage_state = self.get_user_data('stage_state')
+        #print('-'*10)
+        #print(f'{self.name}. handle_key_press')
+        #print(f'step: {stage_state.nsteps+1}')
         if self.get_user_data('finished', False): return
 
         key = javascript_inputs.args['key']
@@ -239,12 +244,9 @@ class EnvStage(Stage):
         next_timesteps = self.get_user_data('next_timesteps')
         timestep = jax.tree_map(
             lambda t: t[action_idx], next_timesteps)
-        print('-'*10)
-        print(f'{self.name}. handle_key_press')
         self.step_and_send_timestep(container, timestep)
         success = self.evaluate_success_fn(timestep)
 
-        stage_state = self.get_user_data('stage_state')
         stage_state = stage_state.replace(
             timestep=timestep,
             nsteps=stage_state.nsteps + 1,
