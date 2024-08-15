@@ -140,7 +140,6 @@ class EnvStage(Stage):
         rng = new_rng()
         next_timesteps = self.web_env.next_steps(
             rng, timestep, self.env_params)
-        start = time.time()
         next_images = self.vmap_render_fn(next_timesteps)
 
         next_images = {
