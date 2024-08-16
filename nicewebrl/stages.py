@@ -1,6 +1,7 @@
 from typing import Any, Callable, Dict, Optional
 import time
 import dataclasses
+from datetime import datetime
 import base64
 
 from flax import struct
@@ -13,6 +14,22 @@ from nicewebrl import nicejax
 from nicewebrl.nicejax import new_rng, base64_npimage, make_serializable
 from tortoise import fields, models
 
+
+def print_times(javascript_inputs):
+    from pprint import pprint
+    keydown_time_str = javascript_inputs.args['keydownTime']
+    image_seen_time_str = javascript_inputs.args['imageSeenTime']
+    image_seen_time = datetime.strptime(
+        image_seen_time_str, '%Y-%m-%dT%H:%M:%S.%fZ')
+
+    keydown_time = datetime.strptime(keydown_time_str, '%Y-%m-%dT%H:%M:%S.%fZ')
+
+    # Extract and format hour, minute, second
+    image_seen_time_formatted = image_seen_time.strftime('%H:%M:%S')
+    keydown_time_formatted = keydown_time.strftime('%H:%M:%S')
+
+    print(f"Image Seen Time: {image_seen_time_formatted}")
+    print(f"Keydown Time: {keydown_time_formatted}")
 
 def make_image_html(src):
     html = '<div id = "stateImageContainer" >'
@@ -132,7 +149,11 @@ class EnvStage(Stage):
         if self.action_to_name is None:
             self.action_to_name = dict()
 
-    def step_and_send_timestep(self, container, timestep):
+    def step_and_send_timestep(
+            self,
+            container,
+            timestep,
+            update_display: bool = True):
         #############################
         # get next images and store them client-side
         # setup code to display next wind
@@ -152,11 +173,16 @@ class EnvStage(Stage):
         #############################
         # display image
         #############################
-        self.display_fn(
-            stage=self,
-            container=container,
-            timestep=timestep)
-        ui.run_javascript("window.imageSeenTime = new Date();")
+        if update_display:
+            self.display_fn(
+                stage=self,
+                container=container,
+                timestep=timestep,
+                )
+            ui.run_javascript("window.imageSeenTime = new Date();")
+        else:
+            ui.run_javascript(
+                "window.imageSeenTime = window.next_imageSeenTime;")
 
 
     async def start_stage(self, container: ui.element):
@@ -225,6 +251,10 @@ class EnvStage(Stage):
             self,
             javascript_inputs,
             container):
+        print_times(javascript_inputs)
+
+
+        # Convert the string to a datetime object
         stage_state = self.get_user_data('stage_state')
         #print('-'*10)
         #print(f'{self.name}. handle_key_press')
@@ -243,7 +273,12 @@ class EnvStage(Stage):
         next_timesteps = self.get_user_data('next_timesteps')
         timestep = jax.tree_map(
             lambda t: t[action_idx], next_timesteps)
-        self.step_and_send_timestep(container, timestep)
+
+        self.step_and_send_timestep(
+            container, timestep, 
+            # image is updated client-side
+            update_display=timestep.first(),
+            )
         success = self.evaluate_success_fn(timestep)
 
         stage_state = stage_state.replace(
