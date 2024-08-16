@@ -10,6 +10,9 @@ setup(
         "jax",
         "Pillow",
     ],
+    package_data={
+        '': ['*.js'],
+    },
     author="Wilka Carvalho",
     author_email="wcarvalho92@gmail.com",
     description="",
