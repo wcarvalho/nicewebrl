@@ -251,8 +251,6 @@ class EnvStage(Stage):
             self,
             javascript_inputs,
             container):
-        print_times(javascript_inputs)
-
 
         # Convert the string to a datetime object
         stage_state = self.get_user_data('stage_state')
