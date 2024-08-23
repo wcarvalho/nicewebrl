@@ -298,12 +298,21 @@ class EnvStage(Stage):
         self.set_user_data(stage_state=stage_state)
 
         ################
+        # Stage over?
+        ################
+        achieved_min_success = stage_state.nsuccesses >= self.min_success
+        achieved_max_episodes = stage_state.nepisodes >= self.max_episodes
+        stage_finished = achieved_min_success or achieved_max_episodes
+        self.set_user_data(finished=stage_finished)
+
+        ################
         # Episode over?
         ################
         if timestep.last():
-            ui.notify(
-                'press any arrow key to start next episode',
-                position='center', type='info', timeout=20)
+            if not stage_finished:
+                ui.notify(
+                    'press any arrow key to start next episode',
+                    position='center', type='info', timeout=20)
             if success:
                 ui.notify(
                     'success', type='positive', position='center',
@@ -313,13 +322,6 @@ class EnvStage(Stage):
                     'failure', type='negative', position='center',
                     timeout=10)
 
-        ################
-        # Stage over?
-        ################
-        achieved_min_success = stage_state.nsuccesses >= self.min_success
-        achieved_max_episodes = stage_state.nepisodes >= self.max_episodes
-        stage_finished = achieved_min_success or achieved_max_episodes
-        self.set_user_data(finished=stage_finished)
 
 
 @dataclasses.dataclass

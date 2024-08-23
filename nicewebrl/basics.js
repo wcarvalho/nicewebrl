@@ -7,6 +7,7 @@ document.addEventListener('DOMContentLoaded', async function () {
   ////////////////
   // remove default behavior
   ////////////////
+  window.debug = 0;
   document.addEventListener('keydown', function (event) {
     switch (event.key) {
       case "ArrowUp":
@@ -27,7 +28,7 @@ document.addEventListener('DOMContentLoaded', async function () {
 
     console.log(event.key)
     if (event.key in window.next_states) {
-      if (isFullscreen()){
+      if (isFullscreen() || window.debug > 0){
         next_state = window.next_states[event.key];
         var imgElement = document.getElementById('stateImage')
         imgElement.src = next_state;
