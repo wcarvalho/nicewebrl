@@ -1,5 +1,5 @@
 from typing import List, Tuple
-import random
+import copy
 from typing import Any, Callable, Dict, Optional
 import time
 import dataclasses
@@ -209,8 +209,6 @@ class EnvStage(Stage):
             stage_state=stage_state.replace(
                 timestep=timestep),
         )
-        #print('-'*10)
-        #print(f'{self.name}. load_stage')
         self.step_and_send_timestep(container, timestep)
 
     async def activate(self, container: ui.element):
@@ -238,6 +236,12 @@ class EnvStage(Stage):
         encoded_timestep = base64.b64encode(
             serialized_timestep).decode('ascii')
 
+        step_metadata = copy.deepcopy(self.metadata)
+        step_metadata.update(
+            nsteps=int(self.get_user_data('stage_state').nsteps),
+            episode_idx=int(self.get_user_data('stage_state').nepisodes),
+            nsuccesses=int(self.get_user_data('stage_state').nsuccesses),
+        )
         model = ExperimentData(
             session_id=app.storage.browser['id'],
             stage_idx=app.storage.user['stage_idx'],
@@ -247,7 +251,7 @@ class EnvStage(Stage):
             action_name=action_name,
             action_idx=action_idx,
             data=encoded_timestep,
-            metadata=self.metadata,
+            metadata=step_metadata,
         )
 
         await model.save()
