@@ -1,3 +1,5 @@
+from typing import List, Tuple
+import random
 from typing import Any, Callable, Dict, Optional
 import time
 import dataclasses
@@ -56,6 +58,7 @@ class ExperimentData(models.Model):
     computer_interaction = fields.TextField()
     action_name = fields.TextField()
     action_idx = fields.IntField(index=True)
+    metadata = fields.JSONField(default=dict, blank=True)
     data = fields.TextField()
 
     class Meta:
@@ -94,6 +97,7 @@ class EnvStageState:
 class Stage:
     name: str = 'stage'
     body: str = 'stage'
+    metadata: Dict[str, Any] = dataclasses.field(default_factory=dict)
     display_fn: Callable = None
     finished: bool = False
     next_button: bool = True
@@ -243,6 +247,7 @@ class EnvStage(Stage):
             action_name=action_name,
             action_idx=action_idx,
             data=encoded_timestep,
+            metadata=self.metadata,
         )
 
         await model.save()
@@ -310,3 +315,52 @@ class EnvStage(Stage):
         stage_finished = achieved_min_success or achieved_max_episodes
         self.set_user_data(finished=stage_finished)
 
+
+@dataclasses.dataclass
+class Block:
+    stages: List[Stage]
+    randomize: bool = False
+    metadata: Dict[str, Any] = dataclasses.field(default_factory=dict)
+
+
+def prepare_blocks(blocks: List[Block]) -> List[Stage]:
+    """This function assigns the block metadata to each stage.
+    It also flattens all blocks into a single list of stages.
+    """
+    # assign block description to each stage description
+    for block in blocks:
+        for stage in block.stages:
+            stage.metadata['block_metadata'] = block.metadata
+
+    # flatten all blocks
+    return [stage for block in blocks for stage in block.stages]
+
+def generate_stage_order(blocks: List[Block], block_order: List[int], rng_key: jnp.ndarray) -> List[int]:
+    """This function generates the order in which the stages should be displayed.
+    It takes the blocks and the block order as input and returns the stage order.
+
+    It also randomizes the order of the stages within each block if the block has an EnvStage with the metadata 'eval' set to True.
+    """
+    stage_order = []
+    stage_offset = 0
+    for block_idx in block_order:
+        block = blocks[block_idx]
+        block_stage_indices = list(
+            range(stage_offset, stage_offset + len(block.stages)))
+        if block.randomize:
+            eval_indices = [i for i, stage in enumerate(block.stages)
+                            if isinstance(stage, EnvStage) and stage.metadata.get('eval', False)]
+
+            if eval_indices:
+                rng_key, subkey = jax.random.split(rng_key)
+                eval_indices = jax.random.permutation(
+                    subkey, jnp.array(eval_indices)).tolist()
+                non_eval_indices = [i for i in range(
+                    len(block.stages)) if i not in eval_indices]
+                block_stage_indices = [block_stage_indices[i]
+                                    for i in non_eval_indices + eval_indices]
+
+        stage_order.extend(block_stage_indices)
+        stage_offset += len(block.stages)
+
+    return stage_order

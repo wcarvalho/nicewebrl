@@ -17,7 +17,7 @@ from PIL import Image
 Timestep = Any
 RenderFn = Callable[[Timestep], jax.Array]
 
-def init_rng():
+def get_rng():
     """Initializes a jax.random number generator or gets the latest if already initialized."""
     app.storage.user['seed'] = app.storage.user.get(
         'seed', random.getrandbits(32))
