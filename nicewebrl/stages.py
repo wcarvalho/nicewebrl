@@ -301,11 +301,13 @@ class EnvStage(Stage):
         # Episode over?
         ################
         if timestep.last():
+            ui.notify(
+                'press any arrow key to start next episode',
+                position='center', type='info', timeout=20)
             if success:
                 ui.notify(
                     'success', type='positive', position='center',
-                    timeout=10,
-                          )
+                    timeout=10)
             else:
                 ui.notify(
                     'failure', type='negative', position='center',
