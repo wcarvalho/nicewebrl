@@ -16,7 +16,6 @@ from nicewebrl import nicejax
 from nicewebrl.nicejax import new_rng, base64_npimage, make_serializable
 from tortoise import fields, models
 
-
 def print_times(javascript_inputs):
     from pprint import pprint
     keydown_time_str = javascript_inputs.args['keydownTime']
@@ -192,7 +191,10 @@ class EnvStage(Stage):
     async def start_stage(self, container: ui.element):
         rng = new_rng()
         timestep = self.web_env.reset(rng, self.env_params)
-        stage_state = self.state_cls(timestep=timestep)
+        stage_state = self.state_cls(timestep=timestep).replace(
+            nepisodes=1,
+            nsteps=1,
+        )
         self.set_user_data(
             #timestep=timestep,
             stage_state=stage_state,
@@ -222,11 +224,10 @@ class EnvStage(Stage):
             self.load_stage(container, stage_state)
 
 
-    async def save_experiment_data(self, javascript_inputs):
-
-        key = javascript_inputs.args['key']
-        keydownTime = javascript_inputs.args['keydownTime']
-        imageSeenTime = javascript_inputs.args['imageSeenTime']
+    async def save_experiment_data(self, args):
+        key = args['key']
+        keydownTime = args['keydownTime']
+        imageSeenTime = args['imageSeenTime']
         action_idx = self.key_to_action[key]
         action_name = self.action_to_name.get(action_idx)
 
@@ -242,8 +243,9 @@ class EnvStage(Stage):
             episode_idx=int(self.get_user_data('stage_state').nepisodes),
             nsuccesses=int(self.get_user_data('stage_state').nsuccesses),
         )
+
         model = ExperimentData(
-            session_id=app.storage.browser['id'],
+            session_id=app.storage.user['seed'],
             stage_idx=app.storage.user['stage_idx'],
             image_seen_time=imageSeenTime,
             action_taken_time=keydownTime,
@@ -263,17 +265,14 @@ class EnvStage(Stage):
 
         # Convert the string to a datetime object
         stage_state = self.get_user_data('stage_state')
-        #print('-'*10)
-        #print(f'{self.name}. handle_key_press')
-        #print(f'step: {stage_state.nsteps+1}')
         if self.get_user_data('finished', False): return
 
         key = javascript_inputs.args['key']
         # check if valid environment interaction
         if not key in self.key_to_action: return
 
-        # save experiment data so far
-        await self.save_experiment_data(javascript_inputs)
+        # save experiment data so far (prior time-step + resultant action)
+        await self.save_experiment_data(javascript_inputs.args)
 
         # use action to select from avaialble next time-steps
         action_idx = self.key_to_action[key]
@@ -291,7 +290,7 @@ class EnvStage(Stage):
         stage_state = stage_state.replace(
             timestep=timestep,
             nsteps=stage_state.nsteps + 1,
-            nepisodes=stage_state.nepisodes + timestep.last(),
+            nepisodes=stage_state.nepisodes + timestep.first(),
             nsuccesses=stage_state.nsuccesses + success,
         )
         await save_stage_state(stage_state)
@@ -301,8 +300,12 @@ class EnvStage(Stage):
         # Stage over?
         ################
         achieved_min_success = stage_state.nsuccesses >= self.min_success
-        achieved_max_episodes = stage_state.nepisodes >= self.max_episodes
-        stage_finished = achieved_min_success or achieved_max_episodes
+        achieved_max_episodes = stage_state.nepisodes > self.max_episodes
+        episode_reset = timestep.first()
+
+        # stage is finished AFTER final time-step of last episode
+        # i.e. once the episode resets
+        stage_finished = episode_reset and (achieved_min_success or achieved_max_episodes)
         self.set_user_data(finished=stage_finished)
 
         ################
