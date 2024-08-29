@@ -32,12 +32,6 @@ def print_times(javascript_inputs):
     print(f"Image Seen Time: {image_seen_time_formatted}")
     print(f"Keydown Time: {keydown_time_formatted}")
 
-def make_image_html(src):
-    html = '<div id = "stateImageContainer" >'
-    html += f'<img id = "stateImage" src="{src}">'
-    html += '</div >'
-    return html
-
 class StageStateModel(models.Model):
     id = fields.IntField(primary_key=True)
     session_id = fields.CharField(
@@ -50,13 +44,15 @@ class StageStateModel(models.Model):
 
 class ExperimentData(models.Model):
     id = fields.IntField(primary_key=True)
-    session_id = fields.CharField(max_length=255, index=True)
+    session_id = fields.CharField(
+        max_length=255, index=True)  # Added max_length
     stage_idx = fields.IntField(index=True)
     image_seen_time = fields.TextField()
     action_taken_time = fields.TextField()
     computer_interaction = fields.TextField()
     action_name = fields.TextField()
     action_idx = fields.IntField(index=True)
+    user_data = fields.JSONField(default=dict, blank=True)
     metadata = fields.JSONField(default=dict, blank=True)
     data = fields.TextField()
 
@@ -244,15 +240,22 @@ class EnvStage(Stage):
             nsuccesses=int(self.get_user_data('stage_state').nsuccesses),
         )
 
+        user_data = dict(
+            user_id=app.storage.user['seed'],
+            age=app.storage.user.get('age'),
+            sex=app.storage.user.get('sex'),
+        )
+
         model = ExperimentData(
-            session_id=app.storage.user['seed'],
             stage_idx=app.storage.user['stage_idx'],
+            session_id=app.storage.browser['id'],
             image_seen_time=imageSeenTime,
             action_taken_time=keydownTime,
             computer_interaction=key,
             action_name=action_name,
             action_idx=action_idx,
             data=encoded_timestep,
+            user_data=user_data,
             metadata=step_metadata,
         )
 
