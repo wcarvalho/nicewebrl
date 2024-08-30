@@ -1,4 +1,6 @@
-from typing import List, Tuple
+
+import asyncio
+from typing import List,Tuple
 import copy
 from typing import Any, Callable, Dict, Optional
 import time
@@ -80,7 +82,7 @@ async def save_stage_state(stage_state):
         stage_idx=app.storage.user['stage_idx'],
         data=encoded_data,
     )
-    await model.save()
+    asyncio.create_task(model.save())
 
 @struct.dataclass
 class EnvStageState:
@@ -196,7 +198,7 @@ class EnvStage(Stage):
             #timestep=timestep,
             stage_state=stage_state,
         )
-        await save_stage_state(stage_state)
+        asyncio.create_task(save_stage_state(stage_state))
         self.step_and_send_timestep(container, timestep)
 
     def load_stage(self, container: ui.element, stage_state: EnvStageState):
@@ -260,7 +262,7 @@ class EnvStage(Stage):
             metadata=step_metadata,
         )
 
-        await model.save()
+        asyncio.create_task(model.save())
 
     async def handle_key_press(
             self,
@@ -319,15 +321,15 @@ class EnvStage(Stage):
             if not stage_finished:
                 ui.notify(
                     'press any arrow key to start next episode',
-                    position='center', type='info', timeout=20)
+                    position='center', type='info', timeout=30)
             if success:
                 ui.notify(
                     'success', type='positive', position='center',
-                    timeout=10)
+                    timeout=30)
             else:
                 ui.notify(
                     'failure', type='negative', position='center',
-                    timeout=10)
+                    timeout=30)
 
 
 
