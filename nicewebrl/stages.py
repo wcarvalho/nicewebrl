@@ -16,6 +16,7 @@ from nicewebrl import nicejax
 from nicewebrl.nicejax import new_rng, base64_npimage, make_serializable
 from tortoise import fields, models
 
+
 def print_times(javascript_inputs):
     from pprint import pprint
     keydown_time_str = javascript_inputs.args['keydownTime']
@@ -342,8 +343,9 @@ def prepare_blocks(blocks: List[Block]) -> List[Stage]:
     It also flattens all blocks into a single list of stages.
     """
     # assign block description to each stage description
-    for block in blocks:
+    for block_idx, block in enumerate(blocks):
         for stage in block.stages:
+            block.metadata.update(idx=block_idx)
             stage.metadata['block_metadata'] = block.metadata
 
     # flatten all blocks
@@ -353,28 +355,34 @@ def generate_stage_order(blocks: List[Block], block_order: List[int], rng_key: j
     """This function generates the order in which the stages should be displayed.
     It takes the blocks and the block order as input and returns the stage order.
 
-    It also randomizes the order of the stages within each block if the block has an EnvStage with the metadata 'eval' set to True.
+    It also randomizes the order of the stages within each block if the block's randomize flag is True.
     """
+    # Assign unique indices to each stage in each block
+    block_indices = {}
+    current_index = 0
+    for block_idx, block in enumerate(blocks):
+        block_indices[block_idx] = list(range(current_index, current_index + len(block.stages)))
+        current_index += len(block.stages)
+
+    # Generate the final stage order based on block_order
     stage_order = []
-    stage_offset = 0
     for block_idx in block_order:
         block = blocks[block_idx]
-        block_stage_indices = list(
-            range(stage_offset, stage_offset + len(block.stages)))
+        block_stage_indices = block_indices[block_idx]
+
         if block.randomize:
             eval_indices = [i for i, stage in enumerate(block.stages)
                             if isinstance(stage, EnvStage) and stage.metadata.get('eval', False)]
+            non_eval_indices = [i for i in range(len(block.stages)) if i not in eval_indices]
 
             if eval_indices:
                 rng_key, subkey = jax.random.split(rng_key)
-                eval_indices = jax.random.permutation(
-                    subkey, jnp.array(eval_indices)).tolist()
-                non_eval_indices = [i for i in range(
-                    len(block.stages)) if i not in eval_indices]
-                block_stage_indices = [block_stage_indices[i]
-                                    for i in non_eval_indices + eval_indices]
+                eval_indices = jax.random.permutation(subkey, jnp.array(eval_indices)).tolist()
+
+            # Combine non-eval indices (in original order) with randomized eval indices
+            randomized_indices = non_eval_indices + eval_indices
+            block_stage_indices = [block_stage_indices[i] for i in randomized_indices]
 
         stage_order.extend(block_stage_indices)
-        stage_offset += len(block.stages)
 
     return stage_order
