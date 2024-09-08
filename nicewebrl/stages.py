@@ -211,7 +211,7 @@ class EnvStage(Stage):
         await self.wait_for_start(container, timestep)
         self.step_and_send_timestep(container, timestep)
 
-    def load_stage(self, container: ui.element, stage_state: EnvStageState):
+    async def load_stage(self, container: ui.element, stage_state: EnvStageState):
         rng = new_rng()
         timestep = nicejax.match_types(
             example=self.web_env.reset(rng, self.env_params),
@@ -219,6 +219,7 @@ class EnvStage(Stage):
         self.set_user_data(stage_state=stage_state.replace(
             timestep=timestep),
         )
+        await self.wait_for_start(container, timestep)
         self.step_and_send_timestep(container, timestep)
 
     async def activate(self, container: ui.element):
@@ -229,7 +230,7 @@ class EnvStage(Stage):
         if stage_state is None:
             await self.start_stage(container)
         else:
-            self.load_stage(container, stage_state)
+            await self.load_stage(container, stage_state)
 
 
     async def save_experiment_data(self, args):
