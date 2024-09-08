@@ -129,6 +129,7 @@ class EnvStage(Stage):
     web_env: Any = None
     env_params: struct.PyTreeNode = None
     render_fn: Callable = None
+    reset_display_fn: Callable = None
     vmap_render_fn: Callable = None
     evaluate_success_fn: Callable = lambda t: 0
     check_finished: Callable = lambda t: False
@@ -136,7 +137,7 @@ class EnvStage(Stage):
     action_to_key: Dict[int, str] = None
     action_to_name: Dict[int, str] = None
     next_button: bool = False
-    msg_display_time: int = 60
+    msg_display_time: int = 120
 
     def __post_init__(self):
         super().__post_init__()
@@ -183,19 +184,31 @@ class EnvStage(Stage):
             ui.run_javascript(
                 "window.imageSeenTime = window.next_imageSeenTime;")
 
+    async def wait_for_start(
+            self,
+            container: ui.element,
+            timestep: struct.PyTreeNode,
+            ):
+        if self.reset_display_fn is not None:
+            await self.reset_display_fn(
+                stage=self,
+                container=container,
+                timestep=timestep)
 
     async def start_stage(self, container: ui.element):
         rng = new_rng()
+
+        # NEW EPISODE
         timestep = self.web_env.reset(rng, self.env_params)
         stage_state = self.state_cls(timestep=timestep).replace(
             nepisodes=1,
             nsteps=1,
         )
-        self.set_user_data(
-            #timestep=timestep,
-            stage_state=stage_state,
-        )
+        self.set_user_data(stage_state=stage_state)
         asyncio.create_task(save_stage_state(stage_state))
+
+        # DISPLAY NEW EPISODE
+        await self.wait_for_start(container, timestep)
         self.step_and_send_timestep(container, timestep)
 
     def load_stage(self, container: ui.element, stage_state: EnvStageState):
@@ -282,11 +295,15 @@ class EnvStage(Stage):
         timestep = jax.tree_map(
             lambda t: t[action_idx], next_timesteps)
 
+        # DISPLAY NEW EPISODE
+        new_episode = timestep.first()
+        if new_episode:
+            await self.wait_for_start(container, timestep)
         self.step_and_send_timestep(
-            container, timestep, 
+            container, timestep,
             # image is normally updated client-side
             # if true, update server-side
-            update_display=timestep.first(),
+            update_display=new_episode,
             )
         success = self.evaluate_success_fn(timestep)
 
@@ -329,8 +346,6 @@ class EnvStage(Stage):
                 ui.notify(
                     'failure', type='negative', position='center',
                     timeout=self.msg_display_time)
-
-
 
 @dataclasses.dataclass
 class Block:
@@ -387,3 +402,4 @@ def generate_stage_order(blocks: List[Block], block_order: List[int], rng_key: j
         stage_order.extend(block_stage_indices)
 
     return stage_order
+
