@@ -115,11 +115,6 @@ class Stage:
 
     async def activate(self, container: ui.element):
         self.display_fn(stage=self, container=container)
-        #button = ui.button('Next page')
-        #self.set_user_data(button=button)
-        #print(f'{self.name} user data:')
-        #from pprint import pprint
-        #pprint(self.user_data)
 
     async def handle_button_press(self):
         self.set_user_data(finished=True)
@@ -136,10 +131,12 @@ class EnvStage(Stage):
     render_fn: Callable = None
     vmap_render_fn: Callable = None
     evaluate_success_fn: Callable = lambda t: 0
+    check_finished: Callable = lambda t: False
     state_cls: EnvStageState = None
     action_to_key: Dict[int, str] = None
     action_to_name: Dict[int, str] = None
     next_button: bool = False
+    msg_display_time: int = 60
 
     def __post_init__(self):
         super().__post_init__()
@@ -206,9 +203,8 @@ class EnvStage(Stage):
         timestep = nicejax.match_types(
             example=self.web_env.reset(rng, self.env_params),
             data=stage_state.timestep)
-        self.set_user_data(
-            stage_state=stage_state.replace(
-                timestep=timestep),
+        self.set_user_data(stage_state=stage_state.replace(
+            timestep=timestep),
         )
         self.step_and_send_timestep(container, timestep)
 
@@ -288,7 +284,8 @@ class EnvStage(Stage):
 
         self.step_and_send_timestep(
             container, timestep, 
-            # image is updated client-side
+            # image is normally updated client-side
+            # if true, update server-side
             update_display=timestep.first(),
             )
         success = self.evaluate_success_fn(timestep)
@@ -307,11 +304,13 @@ class EnvStage(Stage):
         ################
         achieved_min_success = stage_state.nsuccesses >= self.min_success
         achieved_max_episodes = stage_state.nepisodes > self.max_episodes
-        episode_reset = timestep.first()
+        finished = (achieved_min_success or achieved_max_episodes)
+        finished = finished or self.check_finished(timestep)
 
+        episode_reset = timestep.first()
         # stage is finished AFTER final time-step of last episode
         # i.e. once the episode resets
-        stage_finished = episode_reset and (achieved_min_success or achieved_max_episodes)
+        stage_finished = episode_reset and finished
         self.set_user_data(finished=stage_finished)
 
         ################
@@ -321,15 +320,15 @@ class EnvStage(Stage):
             if not stage_finished:
                 ui.notify(
                     'press any arrow key to start next episode',
-                    position='center', type='info', timeout=30)
+                    position='center', type='info', timeout=self.msg_display_time)
             if success:
                 ui.notify(
                     'success', type='positive', position='center',
-                    timeout=30)
+                    timeout=self.msg_display_time)
             else:
                 ui.notify(
                     'failure', type='negative', position='center',
-                    timeout=30)
+                    timeout=self.msg_display_time)
 
 
 

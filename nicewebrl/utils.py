@@ -3,13 +3,14 @@ from nicegui import ui
 async def toggle_fullscreen():
   await ui.run_javascript('''
     if (!document.fullscreenElement) {
-        document.documentElement.requestFullscreen();
+        return document.documentElement.requestFullscreen();
     } else {
         if (document.exitFullscreen) {
-            document.exitFullscreen();
+            return document.exitFullscreen();
         }
     }
-    ''')
+    ''',
+    timeout=10)
 
 
 async def check_fullscreen():
