@@ -137,7 +137,7 @@ class EnvStage(Stage):
     action_to_key: Dict[int, str] = None
     action_to_name: Dict[int, str] = None
     next_button: bool = False
-    msg_display_time: int = 120
+    msg_display_time: int = None
 
     def __post_init__(self):
         super().__post_init__()
@@ -223,6 +223,8 @@ class EnvStage(Stage):
         self.step_and_send_timestep(container, timestep)
 
     async def activate(self, container: ui.element):
+        print("="*30)
+        print(self.metadata)
         # (potentially) load stage state from memory
         stage_state = await get_latest_stage_state(
             cls=self.state_cls)
@@ -278,12 +280,13 @@ class EnvStage(Stage):
             self,
             javascript_inputs,
             container):
-
+        print("-"*10)
         # Convert the string to a datetime object
         stage_state = self.get_user_data('stage_state')
         if self.get_user_data('finished', False): return
 
         key = javascript_inputs.args['key']
+        print("key:", key)
         # check if valid environment interaction
         if not key in self.key_to_action: return
 
@@ -296,16 +299,13 @@ class EnvStage(Stage):
         timestep = jax.tree_map(
             lambda t: t[action_idx], next_timesteps)
 
-        # DISPLAY NEW EPISODE
-        new_episode = timestep.first()
-        if new_episode:
-            await self.wait_for_start(container, timestep)
-        self.step_and_send_timestep(
-            container, timestep,
-            # image is normally updated client-side
-            # if true, update server-side
-            update_display=new_episode,
-            )
+        episode_reset = timestep.first()
+        if episode_reset:
+            start_notification = self.get_user_data('start_notification')
+            if start_notification: start_notification.dismiss()
+            success_notification = self.get_user_data('success_notification')
+            if success_notification: success_notification.dismiss()
+
         success = self.evaluate_success_fn(timestep)
 
         stage_state = stage_state.replace(
@@ -314,6 +314,9 @@ class EnvStage(Stage):
             nepisodes=stage_state.nepisodes + timestep.first(),
             nsuccesses=stage_state.nsuccesses + success,
         )
+        print("nsteps:", stage_state.nsteps)
+        print("nepisodes:", stage_state.nepisodes)
+        print("nsuccesses:", stage_state.nsuccesses)
         await save_stage_state(stage_state)
         self.set_user_data(stage_state=stage_state)
 
@@ -325,28 +328,43 @@ class EnvStage(Stage):
         finished = (achieved_min_success or achieved_max_episodes)
         finished = finished or self.check_finished(timestep)
 
-        episode_reset = timestep.first()
         # stage is finished AFTER final time-step of last episode
         # i.e. once the episode resets
         stage_finished = episode_reset and finished
         self.set_user_data(finished=stage_finished)
 
         ################
+        # Display new data?
+        ################
+        update_display = episode_reset and not stage_finished
+        if update_display:
+            await self.wait_for_start(container, timestep)
+        self.step_and_send_timestep(
+            container, timestep,
+            # image is normally updated client-side
+            # when episode resets, update server-side
+            update_display=update_display,
+            )
+        ################
         # Episode over?
         ################
         if timestep.last():
             if not stage_finished:
-                ui.notify(
+                start_notification = ui.notification(
                     'press any arrow key to start next episode',
                     position='center', type='info', timeout=self.msg_display_time)
             if success:
-                ui.notify(
+                success_notification = ui.notification(
                     'success', type='positive', position='center',
                     timeout=self.msg_display_time)
             else:
-                ui.notify(
+                success_notification = ui.notification(
                     'failure', type='negative', position='center',
                     timeout=self.msg_display_time)
+
+            self.set_user_data(
+                start_notification=start_notification,
+                success_notification=success_notification)
 
 @dataclasses.dataclass
 class Block:
