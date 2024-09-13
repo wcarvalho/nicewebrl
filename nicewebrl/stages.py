@@ -108,6 +108,11 @@ class Stage:
         self.user_data[user_seed] = self.user_data.get(user_seed, {})
         return self.user_data[user_seed].get(key, value)
 
+    def pop_user_data(self, key, value=None):
+        user_seed = app.storage.user['seed']
+        self.user_data[user_seed] = self.user_data.get(user_seed, {})
+        return self.user_data[user_seed].pop(key, value)
+
     def set_user_data(self, **kwargs):
         user_seed = app.storage.user['seed']
         self.user_data[user_seed] = self.user_data.get(user_seed, {})
@@ -301,9 +306,9 @@ class EnvStage(Stage):
 
         episode_reset = timestep.first()
         if episode_reset:
-            start_notification = self.get_user_data('start_notification')
+            start_notification = self.pop_user_data('start_notification')
             if start_notification: start_notification.dismiss()
-            success_notification = self.get_user_data('success_notification')
+            success_notification = self.pop_user_data('success_notification')
             if success_notification: success_notification.dismiss()
 
         success = self.evaluate_success_fn(timestep)
