@@ -49,7 +49,10 @@ def new_rng():
 
 def match_types(example: struct.PyTreeNode, data: struct.PyTreeNode):
     def match_types_(ex, d):
-        return jax.numpy.array(d, dtype=ex.dtype)
+        if d is None:
+            return None
+        else:
+            return jax.numpy.array(d, dtype=ex.dtype)
     return jax.tree_map(match_types_, example, data)
 
 def make_serializable(obj: Any):
