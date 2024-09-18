@@ -249,7 +249,7 @@ class EnvStage(Stage):
     async def save_experiment_data(
             self,
             args,
-            async_save=True):
+            synchronous=True):
         key = args['key']
         keydownTime = args['keydownTime']
         imageSeenTime = args['imageSeenTime']
@@ -287,10 +287,10 @@ class EnvStage(Stage):
             user_data=user_data,
             metadata=step_metadata,
         )
-        if async_save:
-            asyncio.create_task(model.save())
-        else:
+        if synchronous:
             await model.save()
+        else:
+            asyncio.create_task(model.save())
 
     async def handle_key_press(
             self,
@@ -312,9 +312,9 @@ class EnvStage(Stage):
 
         # save experiment data so far (prior time-step + resultant action)
         # if not finished, save async
-        not_finished = self.get_user_data('finished_noreset', False)
+        finished_noreset = self.get_user_data('finished_noreset', False)
         await self.save_experiment_data(
-            javascript_inputs.args, async_save=not_finished)
+            javascript_inputs.args, synchronous=finished_noreset)
 
         # use action to select from avaialble next time-steps
         action_idx = self.key_to_action[key]
