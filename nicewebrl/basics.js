@@ -29,6 +29,7 @@ document.addEventListener('DOMContentLoaded', async function () {
   // remove default behavior
   ////////////////
   window.debug = 0;
+  window.accept_keys = false;
   window.next_states = null;
   document.addEventListener('keydown', function (event) {
     switch (event.key) {
@@ -49,7 +50,7 @@ document.addEventListener('DOMContentLoaded', async function () {
   document.addEventListener('keydown', function (event) {
 
     console.log(event.key)
-    if (window.next_states !== null && event.key in window.next_states) {
+    if (window.next_states !== null && window.accept_keys && event.key in window.next_states) {
       if (isFullscreen() || window.debug > 0){
         next_state = window.next_states[event.key];
         var imgElement = document.getElementById('stateImage')

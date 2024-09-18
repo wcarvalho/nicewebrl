@@ -213,8 +213,11 @@ class EnvStage(Stage):
         asyncio.create_task(save_stage_state(stage_state))
 
         # DISPLAY NEW EPISODE
+        ui.run_javascript("window.accept_keys = false;")
         await self.wait_for_start(container, timestep)
         self.step_and_send_timestep(container, timestep)
+        self.set_user_data(started=True)
+        ui.run_javascript("window.accept_keys = true;")
 
     async def load_stage(self, container: ui.element, stage_state: EnvStageState):
         rng = new_rng()
@@ -224,8 +227,11 @@ class EnvStage(Stage):
         self.set_user_data(stage_state=stage_state.replace(
             timestep=timestep),
         )
+        ui.run_javascript("window.accept_keys = false;")
         await self.wait_for_start(container, timestep)
         self.step_and_send_timestep(container, timestep)
+        self.set_user_data(started=True)
+        ui.run_javascript("window.accept_keys = true;")
 
     async def activate(self, container: ui.element):
         print("="*30)
@@ -240,7 +246,10 @@ class EnvStage(Stage):
             await self.load_stage(container, stage_state)
 
 
-    async def save_experiment_data(self, args):
+    async def save_experiment_data(
+            self,
+            args,
+            async_save=True):
         key = args['key']
         keydownTime = args['keydownTime']
         imageSeenTime = args['imageSeenTime']
@@ -278,17 +287,23 @@ class EnvStage(Stage):
             user_data=user_data,
             metadata=step_metadata,
         )
-
-        asyncio.create_task(model.save())
+        if async_save:
+            asyncio.create_task(model.save())
+        else:
+            await model.save()
 
     async def handle_key_press(
             self,
             javascript_inputs,
             container):
+        if not self.get_user_data('started', False):
+            return
+
         print("-"*10)
         # Convert the string to a datetime object
         stage_state = self.get_user_data('stage_state')
-        if self.get_user_data('finished', False): return
+        if self.get_user_data('finished', False):
+            return
 
         key = javascript_inputs.args['key']
         print("key:", key)
@@ -296,7 +311,10 @@ class EnvStage(Stage):
         if not key in self.key_to_action: return
 
         # save experiment data so far (prior time-step + resultant action)
-        await self.save_experiment_data(javascript_inputs.args)
+        # if not finished, save async
+        not_finished = self.get_user_data('finished_noreset', False)
+        await self.save_experiment_data(
+            javascript_inputs.args, async_save=not_finished)
 
         # use action to select from avaialble next time-steps
         action_idx = self.key_to_action[key]
@@ -336,12 +354,13 @@ class EnvStage(Stage):
         # stage is finished AFTER final time-step of last episode
         # i.e. once the episode resets
         stage_finished = episode_reset and finished
+        self.set_user_data(finished_noreset=finished)
         self.set_user_data(finished=stage_finished)
 
         ################
         # Display new data?
         ################
-        update_display = episode_reset and not stage_finished
+        update_display = not stage_finished and episode_reset
         if update_display:
             await self.wait_for_start(container, timestep)
         self.step_and_send_timestep(
