@@ -280,7 +280,7 @@ class EnvStage(Stage):
         else:
             asyncio.create_task(model.save())
 
-    async def terminate_stage(self):
+    async def finish_stage(self):
         if not self.get_user_data('started', False):
             return
         # save experiment data so far (prior time-step + resultant action)
