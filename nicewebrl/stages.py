@@ -240,8 +240,9 @@ class EnvStage(Stage):
         key = args['key']
         keydownTime = args['keydownTime']
         imageSeenTime = args['imageSeenTime']
-        action_idx = self.key_to_action[key]
-        action_name = self.action_to_name.get(action_idx)
+        action_idx = self.key_to_action.get(key, -1)
+        action_name = self.action_to_name.get(
+            action_idx, key)
 
         timestep = self.get_user_data('stage_state').timestep
         timestep = jax.tree_map(make_serializable, timestep)
@@ -286,9 +287,8 @@ class EnvStage(Stage):
         # if finished, save synchronously (to avoid race condition) with next stage
         self.set_user_data(finished_noreset=True)
         self.set_user_data(finished=True)
+        imageSeenTime = await ui.run_javascript('getImageSeenTime()', timeout=10)
 
-        import ipdb; ipdb.set_trace()
-        imageSeenTime = await ui.run_javascript('imageSeenTime()')
         await self.save_experiment_data(
             args=dict(
                 key='timer',
