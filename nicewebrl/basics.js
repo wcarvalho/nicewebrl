@@ -2,6 +2,10 @@ function isFullscreen() {
   return document.fullscreenElement !== null;
 } 
 
+function imageSeenTime() {
+  return window.imageSeenTime;
+} 
+
 // Function to send ping to server every 30 seconds
 async function pingServer() {
   console.log(`Starting ping loop`);

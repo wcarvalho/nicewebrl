@@ -19,22 +19,6 @@ from nicewebrl.nicejax import new_rng, base64_npimage, make_serializable
 from tortoise import fields, models
 
 
-def print_times(javascript_inputs):
-    from pprint import pprint
-    keydown_time_str = javascript_inputs.args['keydownTime']
-    image_seen_time_str = javascript_inputs.args['imageSeenTime']
-    image_seen_time = datetime.strptime(
-        image_seen_time_str, '%Y-%m-%dT%H:%M:%S.%fZ')
-
-    keydown_time = datetime.strptime(keydown_time_str, '%Y-%m-%dT%H:%M:%S.%fZ')
-
-    # Extract and format hour, minute, second
-    image_seen_time_formatted = image_seen_time.strftime('%H:%M:%S')
-    keydown_time_formatted = keydown_time.strftime('%H:%M:%S')
-
-    print(f"Image Seen Time: {image_seen_time_formatted}")
-    print(f"Keydown Time: {keydown_time_formatted}")
-
 class StageStateModel(models.Model):
     id = fields.IntField(primary_key=True)
     session_id = fields.CharField(
@@ -99,6 +83,7 @@ class Stage:
     display_fn: Callable = None
     finished: bool = False
     next_button: bool = True
+    duration: int = None
 
     def __post_init__(self):
         self.user_data = {}
@@ -122,6 +107,10 @@ class Stage:
         self.display_fn(stage=self, container=container)
 
     async def handle_button_press(self):
+        # TODO: rename to "finish_stage"
+        self.set_user_data(finished=True)
+
+    async def finish_stage(self):
         self.set_user_data(finished=True)
 
     async def handle_key_press(self, e, container): pass
@@ -142,6 +131,7 @@ class EnvStage(Stage):
     action_to_key: Dict[int, str] = None
     action_to_name: Dict[int, str] = None
     next_button: bool = False
+    notify_success: bool = True
     msg_display_time: int = None
 
     def __post_init__(self):
@@ -213,11 +203,9 @@ class EnvStage(Stage):
         asyncio.create_task(save_stage_state(stage_state))
 
         # DISPLAY NEW EPISODE
-        ui.run_javascript("window.accept_keys = false;")
         await self.wait_for_start(container, timestep)
         self.step_and_send_timestep(container, timestep)
-        self.set_user_data(started=True)
-        ui.run_javascript("window.accept_keys = true;")
+
 
     async def load_stage(self, container: ui.element, stage_state: EnvStageState):
         rng = new_rng()
@@ -227,11 +215,8 @@ class EnvStage(Stage):
         self.set_user_data(stage_state=stage_state.replace(
             timestep=timestep),
         )
-        ui.run_javascript("window.accept_keys = false;")
-        await self.wait_for_start(container, timestep)
+        #await self.wait_for_start(container, timestep)
         self.step_and_send_timestep(container, timestep)
-        self.set_user_data(started=True)
-        ui.run_javascript("window.accept_keys = true;")
 
     async def activate(self, container: ui.element):
         print("="*30)
@@ -240,11 +225,13 @@ class EnvStage(Stage):
         stage_state = await get_latest_stage_state(
             cls=self.state_cls)
 
+        ui.run_javascript("window.accept_keys = false;")
         if stage_state is None:
             await self.start_stage(container)
         else:
             await self.load_stage(container, stage_state)
-
+        self.set_user_data(started=True)
+        ui.run_javascript("window.accept_keys = true;")
 
     async def save_experiment_data(
             self,
@@ -292,6 +279,24 @@ class EnvStage(Stage):
         else:
             asyncio.create_task(model.save())
 
+    async def terminate_stage(self):
+        if not self.get_user_data('started', False):
+            return
+        # save experiment data so far (prior time-step + resultant action)
+        # if finished, save synchronously (to avoid race condition) with next stage
+        self.set_user_data(finished_noreset=True)
+        self.set_user_data(finished=True)
+
+        import ipdb; ipdb.set_trace()
+        imageSeenTime = await ui.run_javascript('imageSeenTime()')
+        await self.save_experiment_data(
+            args=dict(
+                key='timer',
+                keydownTime=imageSeenTime,
+                imageSeenTime=imageSeenTime,
+            ),
+            synchronous=True)
+
     async def handle_key_press(
             self,
             javascript_inputs,
@@ -300,8 +305,6 @@ class EnvStage(Stage):
             return
 
         print("-"*10)
-        # Convert the string to a datetime object
-        stage_state = self.get_user_data('stage_state')
         if self.get_user_data('finished', False):
             return
 
@@ -311,7 +314,7 @@ class EnvStage(Stage):
         if not key in self.key_to_action: return
 
         # save experiment data so far (prior time-step + resultant action)
-        # if not finished, save async
+        # if finished, save synchronously (to avoid race condition) with next stage
         finished_noreset = self.get_user_data('finished_noreset', False)
         await self.save_experiment_data(
             javascript_inputs.args, synchronous=finished_noreset)
@@ -331,6 +334,7 @@ class EnvStage(Stage):
 
         success = self.evaluate_success_fn(timestep)
 
+        stage_state = self.get_user_data('stage_state')
         stage_state = stage_state.replace(
             timestep=timestep,
             nsteps=stage_state.nsteps + 1,
@@ -377,14 +381,16 @@ class EnvStage(Stage):
                 start_notification = ui.notification(
                     'press any arrow key to start next episode',
                     position='center', type='info', timeout=self.msg_display_time)
-            if success:
-                success_notification = ui.notification(
-                    'success', type='positive', position='center',
-                    timeout=self.msg_display_time)
-            else:
-                success_notification = ui.notification(
-                    'failure', type='negative', position='center',
-                    timeout=self.msg_display_time)
+            success_notification = None
+            if self.notify_success:
+                if success:
+                    success_notification = ui.notification(
+                        'success', type='positive', position='center',
+                        timeout=self.msg_display_time)
+                else:
+                    success_notification = ui.notification(
+                        'failure', type='negative', position='center',
+                        timeout=self.msg_display_time)
 
             self.set_user_data(
                 start_notification=start_notification,
