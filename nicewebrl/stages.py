@@ -184,11 +184,15 @@ class EnvStage(Stage):
             container: ui.element,
             timestep: struct.PyTreeNode,
             ):
+        ui.run_javascript("window.accept_keys = false;")
         if self.reset_display_fn is not None:
             await self.reset_display_fn(
                 stage=self,
                 container=container,
                 timestep=timestep)
+
+        self.set_user_data(started=True)
+        ui.run_javascript("window.accept_keys = true;")
 
     async def start_stage(self, container: ui.element):
         rng = new_rng()
@@ -225,12 +229,10 @@ class EnvStage(Stage):
         stage_state = await get_latest_stage_state(
             cls=self.state_cls)
 
-        ui.run_javascript("window.accept_keys = false;")
         if stage_state is None:
             await self.start_stage(container)
         else:
             await self.load_stage(container, stage_state)
-        self.set_user_data(started=True)
         ui.run_javascript("window.accept_keys = true;")
 
     async def save_experiment_data(

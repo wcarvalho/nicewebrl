@@ -52,7 +52,10 @@ def match_types(example: struct.PyTreeNode, data: struct.PyTreeNode):
         if d is None:
             return None
         else:
-            return jax.numpy.array(d, dtype=ex.dtype)
+            if hasattr(ex, 'dtype'):
+                return jax.numpy.array(d, dtype=ex.dtype)
+            else:
+                return d
     return jax.tree_map(match_types_, example, data)
 
 def make_serializable(obj: Any):
