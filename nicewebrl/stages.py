@@ -162,6 +162,7 @@ class EnvStage(Stage):
             self.action_to_key[idx]: base64_npimage(image) for idx, image in enumerate(next_images)}
 
         js_code = f"window.next_states = {next_images};"
+
         ui.run_javascript(js_code)
 
         self.set_user_data(next_timesteps=next_timesteps)
@@ -191,7 +192,6 @@ class EnvStage(Stage):
                 container=container,
                 timestep=timestep)
 
-        self.set_user_data(started=True)
         ui.run_javascript("window.accept_keys = true;")
 
     async def start_stage(self, container: ui.element):
@@ -233,6 +233,7 @@ class EnvStage(Stage):
             await self.start_stage(container)
         else:
             await self.load_stage(container, stage_state)
+        self.set_user_data(started=True)
         ui.run_javascript("window.accept_keys = true;")
 
     async def save_experiment_data(
@@ -291,6 +292,13 @@ class EnvStage(Stage):
         self.set_user_data(finished=True)
         imageSeenTime = await ui.run_javascript('getImageSeenTime()', timeout=10)
 
+        start_notification = self.pop_user_data('start_notification')
+        if start_notification:
+            start_notification.dismiss()
+        success_notification = self.pop_user_data('success_notification')
+        if success_notification:
+            success_notification.dismiss()
+
         await self.save_experiment_data(
             args=dict(
                 key='timer',
@@ -308,8 +316,8 @@ class EnvStage(Stage):
 
         print("-"*10)
         if self.get_user_data('finished', False):
+            print("finished")
             return
-
         key = javascript_inputs.args['key']
         print("key:", key)
         # check if valid environment interaction
@@ -346,7 +354,11 @@ class EnvStage(Stage):
         print("nsteps:", stage_state.nsteps)
         print("nepisodes:", stage_state.nepisodes)
         print("nsuccesses:", stage_state.nsuccesses)
-        await save_stage_state(stage_state)
+
+        if finished_noreset:
+            await save_stage_state(stage_state)
+        else:
+            asyncio.create_task(save_stage_state(stage_state))
         self.set_user_data(stage_state=stage_state)
 
         ################
