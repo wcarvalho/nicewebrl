@@ -1,8 +1,8 @@
-window.isFullscreen = function () {
-  return document.fullscreenElement !== null;
+async function isFullscreen() {
+  return document.fullscreenElement != null;
 } 
 
-window.getImageSeenTime = function () {
+async function getImageSeenTime() {
   return window.imageSeenTime;
 } 
 

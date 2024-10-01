@@ -144,6 +144,14 @@ class EnvStage(Stage):
         if self.action_to_name is None:
             self.action_to_name = dict()
 
+    def print(self, str):
+        user_id = app.storage.user.get(
+            'user_id', None)
+        if user_id is not None:
+            print(f"{user_id}:", str)
+        else:
+            print(str)
+
     def step_and_send_timestep(
             self,
             container,
@@ -223,8 +231,8 @@ class EnvStage(Stage):
         self.step_and_send_timestep(container, timestep)
 
     async def activate(self, container: ui.element):
-        print("="*30)
-        print(self.metadata)
+        self.print("="*30)
+        self.print(self.metadata)
         # (potentially) load stage state from memory
         stage_state = await get_latest_stage_state(
             cls=self.state_cls)
@@ -314,12 +322,12 @@ class EnvStage(Stage):
         if not self.get_user_data('started', False):
             return
 
-        print("-"*10)
+        self.print("-"*10)
         if self.get_user_data('finished', False):
-            print("finished")
+            self.print("finished")
             return
         key = javascript_inputs.args['key']
-        print("key:", key)
+        self.print(f'key: {key}')
         # check if valid environment interaction
         if not key in self.key_to_action: return
 
@@ -351,9 +359,9 @@ class EnvStage(Stage):
             nepisodes=stage_state.nepisodes + timestep.first(),
             nsuccesses=stage_state.nsuccesses + success,
         )
-        print("nsteps:", stage_state.nsteps)
-        print("nepisodes:", stage_state.nepisodes)
-        print("nsuccesses:", stage_state.nsuccesses)
+        self.print(f"nsteps: {stage_state.nsteps}")
+        self.print(f"nepisodes: {stage_state.nepisodes}")
+        self.print(f"nsuccesses: {stage_state.nsuccesses}")
 
         if finished_noreset:
             await save_stage_state(stage_state)
