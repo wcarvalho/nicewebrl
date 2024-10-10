@@ -28,31 +28,34 @@ async def check_fullscreen():
     return result
 
 
-async def wait_for_button_or_keypress(button):
-    """Returns when the button is clicked or a key is pressed"""
-    # Create an asyncio Future that will be set when a key is pressed
+async def wait_for_button_or_keypress(button, ignore_recent_press=False):
+    """Returns when the button is clicked or a new key is pressed"""
     key_pressed_future = asyncio.get_event_loop().create_future()
+    last_key_press_time = asyncio.get_event_loop().time()  # Initialize with current time
 
-    # Define the keypress event handler
     def on_keypress(event):
-        if not key_pressed_future.done():
-            key_pressed_future.set_result(event)
+        nonlocal last_key_press_time
+        current_time = asyncio.get_event_loop().time()
 
-    # Register the keypress event handler
+        if ignore_recent_press:
+            if (current_time - last_key_press_time) > .5 and not key_pressed_future.done():
+                key_pressed_future.set_result(event)
+        else:
+            if not key_pressed_future.done():
+                key_pressed_future.set_result(event)
+
+        last_key_press_time = current_time
+
     keyboard = ui.keyboard(on_key=on_keypress)
 
-    # Await until either the button is clicked or a key is pressed
     tasks = [button.clicked(), key_pressed_future]
     done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
 
-    # Cancel any pending tasks to clean up
     for task in pending:
         if not task.done():
             task.cancel()
 
-    # Unregister the keypress event handler to prevent memory leaks
     keyboard.delete()
 
-    # Return the result (could be button click or keypress event)
     for task in done:
         return task.result()

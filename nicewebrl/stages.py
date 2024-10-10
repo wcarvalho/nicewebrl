@@ -1,6 +1,5 @@
-
 import asyncio
-from typing import List,Tuple
+from typing import List,Tuple, Dict
 import copy
 from typing import Any, Callable, Dict, Optional
 import time
@@ -18,6 +17,7 @@ from nicewebrl import nicejax
 from nicewebrl.nicejax import new_rng, base64_npimage, make_serializable
 from tortoise import fields, models
 
+FeedbackFn = Callable[[struct.PyTreeNode], Dict]
 
 class StageStateModel(models.Model):
     id = fields.IntField(primary_key=True)
@@ -31,17 +31,12 @@ class StageStateModel(models.Model):
 
 class ExperimentData(models.Model):
     id = fields.IntField(primary_key=True)
-    session_id = fields.CharField(
-        max_length=255, index=True)  # Added max_length
+    session_id = fields.CharField(max_length=255, index=True)
+    name = fields.TextField()
     stage_idx = fields.IntField(index=True)
-    image_seen_time = fields.TextField()
-    action_taken_time = fields.TextField()
-    computer_interaction = fields.TextField()
-    action_name = fields.TextField()
-    action_idx = fields.IntField(index=True)
+    data = fields.JSONField(default=dict)
     user_data = fields.JSONField(default=dict, blank=True)
     metadata = fields.JSONField(default=dict, blank=True)
-    data = fields.TextField()
 
     class Meta:
         table = "experiment"
@@ -127,6 +122,7 @@ class EnvStage(Stage):
     vmap_render_fn: Callable = None
     evaluate_success_fn: Callable = lambda t: 0
     check_finished: Callable = lambda t: False
+    custom_data_fn: Callable = None
     state_cls: EnvStageState = None
     action_to_key: Dict[int, str] = None
     action_to_name: Dict[int, str] = None
@@ -145,8 +141,8 @@ class EnvStage(Stage):
             self.action_to_name = dict()
 
     def print(self, str):
-        user_id = app.storage.user.get(
-            'user_id', None)
+        user_id = app.storage.user.get('user_id')
+        user_id = user_id or app.storage.user.get('seed')
         if user_id is not None:
             print(f"{user_id}:", str)
         else:
@@ -227,7 +223,7 @@ class EnvStage(Stage):
         self.set_user_data(stage_state=stage_state.replace(
             timestep=timestep),
         )
-        #await self.wait_for_start(container, timestep)
+
         self.step_and_send_timestep(container, timestep)
 
     async def activate(self, container: ui.element):
@@ -252,10 +248,13 @@ class EnvStage(Stage):
         keydownTime = args['keydownTime']
         imageSeenTime = args['imageSeenTime']
         action_idx = self.key_to_action.get(key, -1)
-        action_name = self.action_to_name.get(
-            action_idx, key)
+        action_name = self.action_to_name.get(action_idx, key)
 
         timestep = self.get_user_data('stage_state').timestep
+        timestep_data = {}
+        if self.custom_data_fn is not None:
+            timestep_data = self.custom_data_fn(timestep)
+            timestep_data = jax.tree_map(make_serializable, timestep_data)
         timestep = jax.tree_map(make_serializable, timestep)
         serialized_timestep = serialization.to_bytes(timestep)
         encoded_timestep = base64.b64encode(
@@ -272,19 +271,23 @@ class EnvStage(Stage):
             user_id=app.storage.user['seed'],
             age=app.storage.user.get('age'),
             sex=app.storage.user.get('sex'),
+            **timestep_data,
         )
 
         model = ExperimentData(
             stage_idx=app.storage.user['stage_idx'],
             session_id=app.storage.browser['id'],
-            image_seen_time=imageSeenTime,
-            action_taken_time=keydownTime,
-            computer_interaction=key,
-            action_name=action_name,
-            action_idx=action_idx,
-            data=encoded_timestep,
+            data=dict(
+                image_seen_time=imageSeenTime,
+                action_taken_time=keydownTime,
+                computer_interaction=key,
+                action_name=action_name,
+                action_idx=action_idx,
+                timestep=encoded_timestep,
+            ),
             user_data=user_data,
             metadata=step_metadata,
+            name=self.name,
         )
         if synchronous:
             await model.save()
@@ -317,7 +320,7 @@ class EnvStage(Stage):
 
     async def handle_key_press(
             self,
-            javascript_inputs,
+            event,
             container):
         if not self.get_user_data('started', False):
             return
@@ -326,7 +329,7 @@ class EnvStage(Stage):
         if self.get_user_data('finished', False):
             self.print("finished")
             return
-        key = javascript_inputs.args['key']
+        key = event.args['key']
         self.print(f'key: {key}')
         # check if valid environment interaction
         if not key in self.key_to_action: return
@@ -335,7 +338,7 @@ class EnvStage(Stage):
         # if finished, save synchronously (to avoid race condition) with next stage
         finished_noreset = self.get_user_data('finished_noreset', False)
         await self.save_experiment_data(
-            javascript_inputs.args, synchronous=finished_noreset)
+            event.args, synchronous=finished_noreset)
 
         # use action to select from avaialble next time-steps
         action_idx = self.key_to_action[key]
@@ -359,9 +362,7 @@ class EnvStage(Stage):
             nepisodes=stage_state.nepisodes + timestep.first(),
             nsuccesses=stage_state.nsuccesses + success,
         )
-        self.print(f"nsteps: {stage_state.nsteps}")
-        self.print(f"nepisodes: {stage_state.nepisodes}")
-        self.print(f"nsuccesses: {stage_state.nsuccesses}")
+        self.print(f"nsteps: {stage_state.nsteps}, nepisodes: {stage_state.nepisodes}, nsuccesses: {stage_state.nsuccesses}")
 
         if finished_noreset:
             await save_stage_state(stage_state)
@@ -399,6 +400,7 @@ class EnvStage(Stage):
         # Episode over?
         ################
         if timestep.last():
+            self.print("="*20)
             if not stage_finished:
                 start_notification = ui.notification(
                     'press any arrow key to start next episode',
@@ -417,6 +419,36 @@ class EnvStage(Stage):
             self.set_user_data(
                 start_notification=start_notification,
                 success_notification=success_notification)
+
+
+@dataclasses.dataclass
+class FeedbackStage(Stage):
+    name: str = 'stage'
+    body: str = 'stage'
+    feedback_fns: List[FeedbackFn] = None
+    finished: bool = False
+    next_button: bool = True
+    duration: int = None
+
+    async def activate(self, container: ui.element):
+        results = await self.display_fn(stage=self, container=container)
+        user_data = dict(
+            user_id=app.storage.user['seed'],
+            age=app.storage.user.get('age'),
+            sex=app.storage.user.get('sex'),
+        )
+        metadata = copy.deepcopy(self.metadata)
+        model = ExperimentData(
+            stage_idx=app.storage.user['stage_idx'],
+            name=self.name,
+            session_id=app.storage.browser['id'],
+            data=results,
+            user_data=user_data,
+            metadata=metadata,
+        )
+        await model.save()
+        await self.finish_stage()
+
 
 @dataclasses.dataclass
 class Block:
@@ -473,4 +505,3 @@ def generate_stage_order(blocks: List[Block], block_order: List[int], rng_key: j
         stage_order.extend(block_stage_indices)
 
     return stage_order
-
