@@ -110,8 +110,38 @@ class Stage:
 
     async def handle_key_press(self, e, container): pass
 
+
+@dataclasses.dataclass
+class FeedbackStage(Stage):
+    """A simple feedback stage to collect data from a participant.
+    
+    I assume that the display_fn will return once user data is collected and the stage is over. The display_fn should return a dictionary collected data. This is added to the data field of the ExperimentData object.
+    """
+    next_button: bool = False
+
+    async def activate(self, container: ui.element):
+        results = await self.display_fn(stage=self, container=container)
+        user_data = dict(
+            user_id=app.storage.user['seed'],
+            age=app.storage.user.get('age'),
+            sex=app.storage.user.get('sex'),
+        )
+        metadata = copy.deepcopy(self.metadata)
+        model = ExperimentData(
+            stage_idx=app.storage.user['stage_idx'],
+            name=self.name,
+            session_id=app.storage.browser['id'],
+            data=results,
+            user_data=user_data,
+            metadata=metadata,
+        )
+        await model.save()
+        await self.finish_stage()
+
+
 @dataclasses.dataclass
 class EnvStage(Stage):
+
     instruction: str = 'instruction'
     max_episodes: Optional[int] = 10
     min_success: Optional[int] = 1
@@ -420,34 +450,6 @@ class EnvStage(Stage):
                 start_notification=start_notification,
                 success_notification=success_notification)
 
-
-@dataclasses.dataclass
-class FeedbackStage(Stage):
-    name: str = 'stage'
-    body: str = 'stage'
-    feedback_fns: List[FeedbackFn] = None
-    finished: bool = False
-    next_button: bool = True
-    duration: int = None
-
-    async def activate(self, container: ui.element):
-        results = await self.display_fn(stage=self, container=container)
-        user_data = dict(
-            user_id=app.storage.user['seed'],
-            age=app.storage.user.get('age'),
-            sex=app.storage.user.get('sex'),
-        )
-        metadata = copy.deepcopy(self.metadata)
-        model = ExperimentData(
-            stage_idx=app.storage.user['stage_idx'],
-            name=self.name,
-            session_id=app.storage.browser['id'],
-            data=results,
-            user_data=user_data,
-            metadata=metadata,
-        )
-        await model.save()
-        await self.finish_stage()
 
 
 @dataclasses.dataclass
