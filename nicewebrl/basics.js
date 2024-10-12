@@ -20,7 +20,11 @@ async function pingServer() {
     }
     // Wait for 30 seconds before sending the next ping
     seconds = 30
-    await new Promise(resolve => setTimeout(resolve, seconds * 1000));
+    try {
+      await new Promise(resolve => setTimeout(resolve, seconds * 1000));
+    } catch (err) {
+      console.error('Error in ping loop:', err);
+    }
   }
 }
 document.addEventListener('DOMContentLoaded', async function () {

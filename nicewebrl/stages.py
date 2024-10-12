@@ -244,7 +244,6 @@ class EnvStage(Stage):
         await self.wait_for_start(container, timestep)
         self.step_and_send_timestep(container, timestep)
 
-
     async def load_stage(self, container: ui.element, stage_state: EnvStageState):
         rng = new_rng()
         timestep = nicejax.match_types(
@@ -313,6 +312,7 @@ class EnvStage(Stage):
                 computer_interaction=key,
                 action_name=action_name,
                 action_idx=action_idx,
+                timelimit=self.duration,
                 timestep=encoded_timestep,
             ),
             user_data=user_data,
