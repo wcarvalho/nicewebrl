@@ -127,6 +127,7 @@ class FeedbackStage(Stage):
             sex=app.storage.user.get('sex'),
         )
         metadata = copy.deepcopy(self.metadata)
+        metadata['type'] = 'FeedbackStage'
         model = ExperimentData(
             stage_idx=app.storage.user['stage_idx'],
             name=self.name,
@@ -294,6 +295,7 @@ class EnvStage(Stage):
             nsteps=int(self.get_user_data('stage_state').nsteps),
             episode_idx=int(self.get_user_data('stage_state').nepisodes),
             nsuccesses=int(self.get_user_data('stage_state').nsuccesses),
+            type='EnvStage',
         )
 
         user_data = dict(
