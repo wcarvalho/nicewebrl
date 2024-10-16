@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "NiceWebRL"
+version = "0.0.2"
+authors = [
+    {name = "Wilka Carvalho", email = "wcarvalho92@gmail.com"},
+]
+description = "Python library for quickly making interactive RL Apps with NiceGUI"
+readme = "README.md"
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "nicegui",
+    "tortoise-orm",
+    "Pillow",
+    "jax>=0.4.16",
+    "distrax>=0.1.5",
+    "flax>=0.8.2",
+    "numpy>=1.26.4,<2",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/wcarvalho/nicewebrl"
+"Bug Tracker" = "https://github.com/wcarvalho/nicewebrl/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["*"]
+exclude = []
+
+[tool.setuptools.package-data]
+"*" = ["*.js"]
