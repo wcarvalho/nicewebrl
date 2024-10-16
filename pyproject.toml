@@ -24,6 +24,7 @@ dependencies = [
     "distrax>=0.1.5",
     "flax>=0.8.2",
     "numpy>=1.26.4,<2",
+    "polars,
 ]
 
 [project.urls]
