@@ -1,7 +1,11 @@
-from typing import List
+from typing import List, Callable, Optional, Tuple
 import polars as pl
 import numpy as np
 from flax import struct
+from pprint import pprint
+
+Remove = bool
+EpisodeFilter = Callable[[struct.PyTreeNode], Remove]
 
 class DataFrame(object):
 
@@ -9,8 +13,20 @@ class DataFrame(object):
             self,
             df: pl.DataFrame,
             episodes: List[struct.PyTreeNode],
-            index_key: str='index'):
-        if "index" not in df.columns:
+            index_key: str='index',
+            reindex: bool=True,
+            ):
+        """
+        Initialize the DataFrame object.
+        
+        Args:
+            df: A polars DataFrame.
+            episodes: A list of PyTreeNode objects representing episodes.
+            index_key: The name of the index column (default: 'index').
+        """
+        if reindex or "index" not in df.columns:
+            if "index" in df.columns:
+                df = df.drop("index")
             df = df.with_row_count("index")
         self._df = df
         self._episodes = episodes
@@ -18,47 +34,61 @@ class DataFrame(object):
 
     # provide proxy access to regular attributes of wrapped object
     def __getattr__(self, name):
+        """
+        Provide proxy access to regular attributes of the wrapped polars DataFrame.
+        
+        Args:
+            name: The attribute name to access.
+        
+        Returns:
+            The attribute value from the wrapped DataFrame.
+        """
         return getattr(self._df, name)
 
-    def filter(self, **kwargs):
+    def filter(self, episode_filter: Optional[EpisodeFilter] = None, **kwargs):
+        """
+        Filter the DataFrame and corresponding episodes based on given conditions.
+        
+        Args:
+            **kwargs: Keyword arguments for filtering conditions.
+        
+        Returns:
+            A new DataFrame object with filtered data and episodes.
+        """
+        if len(kwargs) == 0:
+            assert episode_filter is not None, 'need either episode_filter or kwargs for dataframe filter'
+            return self._filter_episodes(episode_filter)
+
         df = self._df.filter(**kwargs)
         idxs = np.array(df[self._index_key])
         episodes = [self._episodes[idx] for idx in idxs]
-        return DataFrame(
+
+        df = DataFrame(
             df=df,
             episodes=episodes,
             index_key=self._index_key)
 
-    def split_apply(
-            self,
-            fn,
-            split_filter_fn,
-            split_filter_settings: dict,
-            comp_settings: dict,
-            comp_filter_fn=None,
-            split_key: str = 'user_id'):
+        if episode_filter is not None:
+            df = df._filter_episodes(episode_filter)
+        return df
 
-        keys = self._df[split_key].unique()
-        array = []
-        for key in keys:
-            filter_df = self.filter(**split_filter_settings, **{split_key: key})
-            if split_filter_fn(filter_df):
-                continue
-            comp_df = self.filter(**comp_settings, **{split_key: key})
-            val = comp_df.apply(fn=fn, filter_fn=comp_filter_fn)
-            if len(val) > 0:
-                array.append(np.array(val))
-
-        return array
-
-    def filter_row_with_episode(self, filter_fn):
+    def _filter_episodes(self, episode_filter: EpisodeFilter):
+        """
+        Filter rows and episodes based on a given filter function.
+        
+        Args:
+            filter_fn: A function that takes an episode and returns a boolean.
+        
+        Returns:
+            A new DataFrame object with filtered rows and episodes.
+        """
         new_rows = []
         new_episodes = []
         for idx, row in enumerate(self._df.iter_rows(named=True)):
-            if not filter_fn(self.episodes[idx]):
+            if not episode_filter(self.episodes[idx]):
                 new_rows.append(row)
                 new_episodes.append(self._episodes[idx])
-        
+
         new_df = pl.DataFrame(new_rows)
         return DataFrame(
             df=new_df,
@@ -66,28 +96,177 @@ class DataFrame(object):
             index_key=self._index_key
         )
 
-    def apply(self, fn, filter_fn=None, post_fn = lambda x: x, **kwargs):
+    def subset(
+            self,
+            input_episode_filter: EpisodeFilter,
+            input_settings: dict,
+            output_settings: dict,
+            output_episode_filter: Optional[EpisodeFilter] = None,
+            splitting_key: str = 'user_id'):
+        """
+        Create a subset of the DataFrame by applying filtering steps based on a splitting key.
+
+        This function performs the following steps:
+        1. Splits the DataFrame into groups based on unique values in the splitting_key column.
+        2. For each group:
+           a. Applies an initial filter (settings) to the group.
+           b. Evaluates the filtered group using filter_fn to decide whether to include it.
+           c. If included, adds the original (unfiltered) group data to the subset.
+        3. Combines the included groups into a new DataFrame.
+
+        Args:
+            filter_fn: A function that takes a filtered DataFrame and returns a tuple (score, remove).
+                       If remove is True, the group is excluded from the final subset.
+            settings: A dictionary of filtering conditions for the initial group evaluation.
+            splitting_key: The column name to use for splitting the DataFrame into groups (default: 'user_id').
+
+        Returns:
+            A new DataFrame object containing the filtered subset of data and episodes.
+
+        Note:
+            The function prints a message for each group that is skipped based on the filter_fn evaluation.
+        """
+
+        dfs = []
+        episodes = []
+
+        if splitting_key in output_settings:
+            # if you're only getting a single value from splitting_key, then you don't need to iterate
+            keys = [output_settings[splitting_key]]
+        else:
+            # Get unique values in the splitting_key column
+            keys = self[splitting_key].unique().to_list()
+
+        # Iterate through each unique key
+        for key in keys:
+
+            # Apply initial filter to the group
+            final_input_settings = {splitting_key: key}
+            final_input_settings.update(output_settings)
+            final_input_settings.update(input_settings)
+
+            filter_df = self.filter(**final_input_settings)
+
+            # Apply filter_fn to determine if the group should be included
+            remove = input_episode_filter(filter_df)
+            if remove:
+                continue
+
+            final_output_settings = {
+                splitting_key: key,
+                **output_settings
+            }
+
+            ouput_df = self.filter(**final_output_settings)
+            if output_episode_filter is not None:
+                ouput_df = ouput_df._filter_episodes(
+                    episode_filter=output_episode_filter)
+
+            dfs.append(ouput_df._df)
+            episodes.extend(ouput_df.episodes)
+
+        subset = (
+            pl.concat(dfs, how="diagonal_relaxed")
+            .with_row_count(name="row_number")
+            .with_columns(
+                pl.col("row_number").alias("index")
+            )
+            .drop("row_number")
+        )
+        return DataFrame(subset, episodes)
+
+    def apply(self, fn, episode_filter: Optional[EpisodeFilter] = None, output_transform = lambda x: x, **kwargs):
+        """
+        Apply a function to each episode, with optional filtering and post-processing.
+        
+        Args:
+            fn: The function to apply to each episode.
+            filter_fn: An optional function to filter episodes.
+            post_fn: An optional function to post-process the results (default: identity function).
+            **kwargs: Optional keyword arguments for filtering the DataFrame before applying the function.
+        
+        Returns:
+            The result of applying post_fn to the list of function results.
+        """
         if len(kwargs) > 0:
             eval_df = self.filter(**kwargs)
         else:
             eval_df = self
         array = []
         for e in eval_df.episodes:
-            if filter_fn is not None:
-                if filter_fn(e): continue
+            if episode_filter is not None:
+                if episode_filter(e): continue
             val = fn(e)
 
             array.append(val)
 
-        return post_fn(array)
+        return output_transform(array)
+
+    def split_apply(
+            self,
+            fn,
+            input_episode_filter: EpisodeFilter,
+            input_settings: dict,
+            output_settings: dict,
+            output_episode_filter: Optional[EpisodeFilter] = None,
+            splitting_key: str = 'user_id'):
+        """
+        Split the DataFrame by a key, apply filters, and compute a function on each group.
+        
+        Args:
+            fn: The function to apply to each group.
+            filter_fn: A function to filter split groups.
+            filter_settings: Settings for filtering split groups.
+            output_settings: Settings for filtering computation groups.
+            output_filter_fn: An optional function to filter computation results.
+            splitting_key: The key to split the DataFrame by (default: 'user_id').
+        
+        Returns:
+            A list of numpy arrays containing the computed results.
+        """
+        keys = self[splitting_key].unique()
+        array = []
+        for key in keys:
+
+            filter_df = self.filter(**input_settings, **{splitting_key: key})
+            remove = input_episode_filter(filter_df)
+            if remove:
+                continue
+
+            output_df = self.filter(**output_settings, **{splitting_key: key})
+            val = output_df.apply(fn=fn, episode_filter=output_episode_filter)
+            if len(val) > 0:
+                array.append(np.array(val))
+
+        return array
 
     @property
     def episodes(self):
+        """
+        Property to access the episodes list.
+        
+        Returns:
+            The list of episodes.
+        """
         return self._episodes
 
     def __len__(self):
+        """
+        Get the length of the DataFrame (number of episodes).
+        
+        Returns:
+            The number of episodes in the DataFrame.
+        """
         return len(self._episodes)
 
     def __getitem__(self, key):
+        """
+        Access columns of the wrapped polars DataFrame.
+        
+        Args:
+            key: The column name or index to access.
+        
+        Returns:
+            The specified column from the wrapped DataFrame.
+        """
         return self._df[key]
-    

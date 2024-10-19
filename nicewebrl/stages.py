@@ -19,6 +19,18 @@ from tortoise import fields, models
 
 FeedbackFn = Callable[[struct.PyTreeNode], Dict]
 
+
+def time_diff(t1, t2) -> float:
+    # Convert string timestamps to datetime objects
+    t1 = datetime.strptime(t1, '%Y-%m-%dT%H:%M:%S.%fZ')
+    t2 = datetime.strptime(t2, '%Y-%m-%dT%H:%M:%S.%fZ')
+
+    # Calculate the time difference
+    time_difference = t2 - t1
+
+    # Convert the time difference to milliseconds
+    return time_difference.total_seconds() * 1000
+
 class StageStateModel(models.Model):
     id = fields.IntField(primary_key=True)
     session_id = fields.CharField(
@@ -160,6 +172,7 @@ class EnvStage(Stage):
     next_button: bool = False
     notify_success: bool = True
     msg_display_time: int = None
+    end_on_final_timestep: bool = True
 
     def __post_init__(self):
         super().__post_init__()
@@ -304,7 +317,7 @@ class EnvStage(Stage):
             sex=app.storage.user.get('sex'),
             **timestep_data,
         )
-
+        print(f'∆t: {time_diff(imageSeenTime, keydownTime)/1000.}s')
         model = ExperimentData(
             stage_idx=app.storage.user['stage_idx'],
             session_id=app.storage.browser['id'],
@@ -331,6 +344,7 @@ class EnvStage(Stage):
             return
         # save experiment data so far (prior time-step + resultant action)
         # if finished, save synchronously (to avoid race condition) with next stage
+
         self.set_user_data(finished_noreset=True)
         self.set_user_data(finished=True)
         imageSeenTime = await ui.run_javascript('getImageSeenTime()', timeout=10)
@@ -369,8 +383,14 @@ class EnvStage(Stage):
         # save experiment data so far (prior time-step + resultant action)
         # if finished, save synchronously (to avoid race condition) with next stage
         finished_noreset = self.get_user_data('finished_noreset', False)
+
+        if self.end_on_final_timestep:
+            synchronous = False
+        else:
+            synchronous = finished_noreset
         await self.save_experiment_data(
-            event.args, synchronous=finished_noreset)
+            event.args,
+            synchronous=synchronous)
 
         # use action to select from avaialble next time-steps
         action_idx = self.key_to_action[key]
@@ -451,7 +471,8 @@ class EnvStage(Stage):
             self.set_user_data(
                 start_notification=start_notification,
                 success_notification=success_notification)
-
+        if self.end_on_final_timestep and finished:
+            await self.finish_stage()
 
 
 @dataclasses.dataclass
