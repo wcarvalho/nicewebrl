@@ -1,3 +1,4 @@
+import io
 from nicegui import ui
 import asyncio
 
@@ -59,3 +60,18 @@ async def wait_for_button_or_keypress(button, ignore_recent_press=False):
 
     for task in done:
         return task.result()
+
+
+class TeeOutput(io.TextIOBase):
+    def __init__(self, file_stream, console_stream):
+        self.file_stream = file_stream
+        self.console_stream = console_stream
+
+    def write(self, s):
+        self.file_stream.write(s)
+        self.console_stream.write(s)
+        return len(s)
+
+    def flush(self):
+        self.file_stream.flush()
+        self.console_stream.flush()

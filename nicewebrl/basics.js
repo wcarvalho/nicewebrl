@@ -56,7 +56,9 @@ document.addEventListener('DOMContentLoaded', async function () {
       if (await isFullscreen() || window.debug > 0) {
         next_state = window.next_states[event.key];
         var imgElement = document.getElementById('stateImage');
-        imgElement.src = next_state;
+        if (imgElement !== null) {
+          imgElement.src = next_state;
+        }
         window.next_imageSeenTime = new Date();
         console.log('set new image');
       }
