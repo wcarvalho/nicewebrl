@@ -1,11 +1,11 @@
-from typing import List, Callable, Optional, Tuple
+from typing import List, Callable, Optional
 import polars as pl
 import numpy as np
 from flax import struct
-from pprint import pprint
 
 Remove = bool
-EpisodeFilter = Callable[[struct.PyTreeNode], Remove]
+Episode = struct.PyTreeNode
+EpisodeFilter = Callable[[Episode], Remove]
 
 class DataFrame(object):
 
@@ -96,52 +96,50 @@ class DataFrame(object):
             index_key=self._index_key
         )
 
-    def subset(
+    def filter_by_group(
             self,
             input_episode_filter: EpisodeFilter,
             input_settings: dict,
             output_settings: dict,
             output_episode_filter: Optional[EpisodeFilter] = None,
-            splitting_key: str = 'user_id'):
+            group_key: str = 'user_id'):
         """
-        Create a subset of the DataFrame by applying filtering steps based on a splitting key.
+        Create a subset of the DataFrame by applying filtering steps based on a group key.
 
         This function performs the following steps:
-        1. Splits the DataFrame into groups based on unique values in the splitting_key column.
+        1. Splits the DataFrame into groups based on unique values in the group_key column.
         2. For each group:
-           a. Applies an initial filter (settings) to the group.
-           b. Evaluates the filtered group using filter_fn to decide whether to include it.
-           c. If included, adds the original (unfiltered) group data to the subset.
+           a. Applies an initial filter (input_settings) to the group.
+           b. Evaluates the filtered group using input_episode_filter to decide whether to include it.
+           c. If included, adds the filtered group data to the subset.
         3. Combines the included groups into a new DataFrame.
 
         Args:
-            filter_fn: A function that takes a filtered DataFrame and returns a tuple (score, remove).
-                       If remove is True, the group is excluded from the final subset.
-            settings: A dictionary of filtering conditions for the initial group evaluation.
-            splitting_key: The column name to use for splitting the DataFrame into groups (default: 'user_id').
+            input_episode_filter: A function that takes a filtered DataFrame and returns a boolean.
+                                  If True, the group is excluded from the final subset.
+            input_settings: A dictionary of filtering conditions for the initial group evaluation.
+            output_settings: A dictionary of filtering conditions for the final output.
+            output_episode_filter: An optional function to filter episodes in the output.
+            group_key: The column name to use for splitting the DataFrame into groups (default: 'user_id').
 
         Returns:
             A new DataFrame object containing the filtered subset of data and episodes.
-
-        Note:
-            The function prints a message for each group that is skipped based on the filter_fn evaluation.
         """
-
         dfs = []
         episodes = []
 
-        if splitting_key in output_settings:
+        if group_key in output_settings:
             # if you're only getting a single value from splitting_key, then you don't need to iterate
-            keys = [output_settings[splitting_key]]
+            keys = [output_settings[group_key]]
         else:
             # Get unique values in the splitting_key column
-            keys = self[splitting_key].unique().to_list()
+            keys = self[group_key].unique().to_list()
 
         # Iterate through each unique key
         for key in keys:
 
             # Apply initial filter to the group
-            final_input_settings = {splitting_key: key}
+            final_input_settings = {group_key: key}
             final_input_settings.update(output_settings)
             final_input_settings.update(input_settings)
 
@@ -153,7 +151,7 @@ class DataFrame(object):
                 continue
 
             final_output_settings = {
-                splitting_key: key,
+                group_key: key,
                 **output_settings
             }
 
@@ -181,12 +179,12 @@ class DataFrame(object):
         
         Args:
             fn: The function to apply to each episode.
-            filter_fn: An optional function to filter episodes.
-            post_fn: An optional function to post-process the results (default: identity function).
+            episode_filter: An optional function to filter episodes.
+            output_transform: An optional function to transform the results (default: identity function).
             **kwargs: Optional keyword arguments for filtering the DataFrame before applying the function.
         
         Returns:
-            The result of applying post_fn to the list of function results.
+            The result of applying output_transform to the list of function results.
         """
         if len(kwargs) > 0:
             eval_df = self.filter(**kwargs)
@@ -202,27 +200,29 @@ class DataFrame(object):
 
         return output_transform(array)
 
-    def split_apply(
+    def apply_by_group(
             self,
             fn,
             input_episode_filter: EpisodeFilter,
             input_settings: dict,
             output_settings: dict,
             output_episode_filter: Optional[EpisodeFilter] = None,
+            output_transform=lambda x: x,
             splitting_key: str = 'user_id'):
         """
         Split the DataFrame by a key, apply filters, and compute a function on each group.
         
         Args:
             fn: The function to apply to each group.
-            filter_fn: A function to filter split groups.
-            filter_settings: Settings for filtering split groups.
+            input_episode_filter: A function to filter split groups.
+            input_settings: Settings for filtering split groups.
             output_settings: Settings for filtering computation groups.
-            output_filter_fn: An optional function to filter computation results.
+            output_episode_filter: An optional function to filter episodes in the output.
+            output_transform: An optional function to transform the final output.
             splitting_key: The key to split the DataFrame by (default: 'user_id').
         
         Returns:
-            A list of numpy arrays containing the computed results.
+            The result of applying output_transform to the list of computed results.
         """
         keys = self[splitting_key].unique()
         array = []
@@ -238,7 +238,7 @@ class DataFrame(object):
             if len(val) > 0:
                 array.append(np.array(val))
 
-        return array
+        return output_transform(array)
 
     @property
     def episodes(self):

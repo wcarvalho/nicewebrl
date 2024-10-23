@@ -40,18 +40,6 @@ document.addEventListener('DOMContentLoaded', async function () {
   window.debug = 0;
   window.accept_keys = false;
   window.next_states = null;
-  //document.addEventListener('keydown', function (event) {
-  //  switch (event.key) {
-  //    case "ArrowUp":
-  //    case "ArrowDown":
-  //    case "ArrowLeft":
-  //    case "ArrowRight":
-  //      event.preventDefault();
-  //      break;
-  //    default:
-  //      break;
-  //  }
-  //});
 
   ////////////////
   // how to handle key presses?
