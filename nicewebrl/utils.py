@@ -1,5 +1,5 @@
 import io
-from nicegui import ui
+from nicegui import ui, app
 import asyncio
 
 async def toggle_fullscreen():
@@ -63,12 +63,18 @@ async def wait_for_button_or_keypress(button, ignore_recent_press=False):
 
 
 class TeeOutput(io.TextIOBase):
-    def __init__(self, file_stream, console_stream):
+    def __init__(self, file_stream, console_stream, user_key: str = 'user_id'):
         self.file_stream = file_stream
         self.console_stream = console_stream
+        self.user_key = user_key
 
     def write(self, s):
         self.file_stream.write(s)
+
+        user_id = app.storage.user.get(self.user_key)
+        if user_id is not None:
+            s = f"{user_id}: {s}"
+
         self.console_stream.write(s)
         return len(s)
 

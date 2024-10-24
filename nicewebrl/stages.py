@@ -184,14 +184,6 @@ class EnvStage(Stage):
         if self.action_to_name is None:
             self.action_to_name = dict()
 
-    def print(self, str):
-        user_id = app.storage.user.get('user_id')
-        user_id = user_id or app.storage.user.get('seed')
-        if user_id is not None:
-            print(f"{user_id}:", str)
-        else:
-            print(str)
-
     def step_and_send_timestep(
             self,
             container,
@@ -270,8 +262,8 @@ class EnvStage(Stage):
         self.step_and_send_timestep(container, timestep)
 
     async def activate(self, container: ui.element):
-        self.print("="*30)
-        self.print(self.metadata)
+        print("="*30)
+        print(self.metadata)
         # (potentially) load stage state from memory
         stage_state = await get_latest_stage_state(
             cls=self.state_cls)
@@ -317,7 +309,7 @@ class EnvStage(Stage):
             sex=app.storage.user.get('sex'),
             **timestep_data,
         )
-        print(f'∆t: {time_diff(imageSeenTime, keydownTime)/1000.}s')
+        print(f'∆t: {time_diff(imageSeenTime, keydownTime)/1000.}')
         model = ExperimentData(
             stage_idx=app.storage.user['stage_idx'],
             session_id=app.storage.browser['id'],
@@ -371,12 +363,12 @@ class EnvStage(Stage):
         if not self.get_user_data('started', False):
             return
 
-        self.print("-"*10)
+        print("-"*10)
         if self.get_user_data('finished', False):
-            self.print("finished")
+            print("finished")
             return
         key = event.args['key']
-        self.print(f'key: {key}')
+        print(f'key: {key}')
         # check if valid environment interaction
         if not key in self.key_to_action: return
 
@@ -414,7 +406,7 @@ class EnvStage(Stage):
             nepisodes=stage_state.nepisodes + timestep.first(),
             nsuccesses=stage_state.nsuccesses + success,
         )
-        self.print(f"nsteps: {stage_state.nsteps}, nepisodes: {stage_state.nepisodes}, nsuccesses: {stage_state.nsuccesses}")
+        print(f"nsteps: {stage_state.nsteps}, nepisodes: {stage_state.nepisodes}, nsuccesses: {stage_state.nsuccesses}")
 
         if finished_noreset:
             await save_stage_state(stage_state)
@@ -452,7 +444,7 @@ class EnvStage(Stage):
         # Episode over?
         ################
         if timestep.last():
-            self.print("="*20)
+            print("="*20)
             if not stage_finished:
                 start_notification = ui.notification(
                     'press any arrow key to start next episode',
