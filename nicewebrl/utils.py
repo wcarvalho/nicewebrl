@@ -62,17 +62,18 @@ async def wait_for_button_or_keypress(button, ignore_recent_press=False):
         return task.result()
 
 
+from absl import logging
 class TeeOutput(io.TextIOBase):
-    def __init__(self, file_stream, console_stream, user_key: str = 'user_id'):
+    def __init__(self, file_stream: io.TextIOBase, console_stream: io.TextIOBase, user_key: str = 'user_id'):
         self.file_stream = file_stream
         self.console_stream = console_stream
         self.user_key = user_key
 
-    def write(self, s):
+    def write(self, s: str) -> int:
         self.file_stream.write(s)
 
         user_id = app.storage.user.get(self.user_key)
-        if user_id is not None:
+        if user_id is not None and s.strip():  # Only add user_id if the string is not empty after stripping
             s = f"{user_id}: {s}"
 
         self.console_stream.write(s)
