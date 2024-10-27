@@ -12,12 +12,13 @@ def basic_javascript_file():
   return file
 
 
-def initialize_user(debug: bool = False, debug_seed: int = 42):
-    if debug:
+def initialize_user(debug_seed: int = 0, *kwargs):
+    if debug_seed:
         app.storage.user['seed'] = debug_seed
     else:
         app.storage.user['seed'] = app.storage.user.get(
             'seed', random.getrandbits(32))
+
     app.storage.user['rng_splits'] = app.storage.user.get('rng_splits', 0)
     if 'rng_key' not in app.storage.user:
         rng_key = jax.random.PRNGKey(app.storage.user['seed'])

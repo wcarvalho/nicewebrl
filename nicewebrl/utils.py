@@ -1,6 +1,11 @@
-import io
+
+import functools
+import random
 from nicegui import ui, app
 import asyncio
+from nicewebrl.logging import get_logger
+
+logger = get_logger(__name__)
 
 async def toggle_fullscreen():
   await ui.run_javascript('''
@@ -25,60 +30,78 @@ async def check_fullscreen():
             timeout=10)
     except TimeoutError as e:
         # Handle the timeout, maybe retry or log the error
-        print(f'JavaScript execution timed out: {e}')
+        logger.error(f'JavaScript execution timed out: {e}')
     return result
 
 
 async def wait_for_button_or_keypress(button, ignore_recent_press=False):
-    """Returns when the button is clicked or a new key is pressed"""
-    key_pressed_future = asyncio.get_event_loop().create_future()
-    last_key_press_time = asyncio.get_event_loop().time()  # Initialize with current time
+    attempt = 0
+    while True:  # This will keep the function running indefinitely
+        try:
+            key_pressed_future = asyncio.get_event_loop().create_future()
+            last_key_press_time = asyncio.get_event_loop().time()
 
-    def on_keypress(event):
-        nonlocal last_key_press_time
-        current_time = asyncio.get_event_loop().time()
+            def on_keypress(event):
+                nonlocal last_key_press_time
+                current_time = asyncio.get_event_loop().time()
 
-        if ignore_recent_press:
-            if (current_time - last_key_press_time) > .5 and not key_pressed_future.done():
-                key_pressed_future.set_result(event)
-        else:
-            if not key_pressed_future.done():
-                key_pressed_future.set_result(event)
+                if ignore_recent_press:
+                    if (current_time - last_key_press_time) > .5 and not key_pressed_future.done():
+                        key_pressed_future.set_result(event)
+                else:
+                    if not key_pressed_future.done():
+                        key_pressed_future.set_result(event)
 
-        last_key_press_time = current_time
+                last_key_press_time = current_time
 
-    keyboard = ui.keyboard(on_key=on_keypress)
+            keyboard = ui.keyboard(on_key=on_keypress)
 
-    tasks = [button.clicked(), key_pressed_future]
-    done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            try:
+                tasks = [button.clicked(), key_pressed_future]
+                done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
 
-    for task in pending:
-        if not task.done():
-            task.cancel()
+                for task in pending:
+                    if not task.done():
+                        task.cancel()
 
-    keyboard.delete()
+                for task in done:
+                    return task.result()
 
-    for task in done:
-        return task.result()
+            except asyncio.CancelledError as e:
+                logger.error(f"{attempt}. Task was cancelled. Cleaning up and retrying...")
+                logger.error(f"Error: {e}")
+                continue
+
+            finally:
+                # Always try to delete the keyboard, but catch any exceptions
+                try:
+                    keyboard.delete()
+                except Exception as e:
+                    logger.error(f"{attempt}. Error deleting keyboard: {str(e)}")
+
+        except Exception as e:
+            logger.error(f"{attempt}. An error occurred: {str(e)}. Retrying...")
+            attempt += 1
+            await asyncio.sleep(1)  # Add a small delay before retrying
 
 
-from absl import logging
-class TeeOutput(io.TextIOBase):
-    def __init__(self, file_stream: io.TextIOBase, console_stream: io.TextIOBase, user_key: str = 'user_id'):
-        self.file_stream = file_stream
-        self.console_stream = console_stream
-        self.user_key = user_key
-
-    def write(self, s: str) -> int:
-        self.file_stream.write(s)
-
-        user_id = app.storage.user.get(self.user_key)
-        if user_id is not None and s.strip():  # Only add user_id if the string is not empty after stripping
-            s = f"{user_id}: {s}"
-
-        self.console_stream.write(s)
-        return len(s)
-
-    def flush(self):
-        self.file_stream.flush()
-        self.console_stream.flush()
+def retry_with_exponential_backoff(max_retries=3, base_delay=1, max_delay=10):
+    def decorator(func):
+        @functools.wraps(func)
+        async def wrapper(*args, **kwargs):
+            for attempt in range(1, max_retries + 1):
+                try:
+                    return await func(*args, **kwargs)
+                except Exception as e:
+                    if attempt == max_retries:
+                        logger.error(f"All {max_retries} attempts failed. Last error: {str(e)}")
+                        raise
+                    
+                    delay = min(base_delay * (2 ** (attempt - 1)) + random.uniform(0, 1), max_delay)
+                    logger.error(f"Attempt {attempt} failed: {str(e)}. Retrying in {delay:.2f} seconds...")
+                    await asyncio.sleep(delay)
+            
+            # This line should never be reached, but it's here for completeness
+            raise Exception("Unexpected error in retry logic")
+        return wrapper
+    return decorator

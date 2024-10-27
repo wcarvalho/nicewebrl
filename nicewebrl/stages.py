@@ -1,3 +1,5 @@
+
+from nicewebrl.logging import get_logger
 import asyncio
 from typing import List,Tuple, Dict
 import copy
@@ -16,9 +18,11 @@ from nicegui import app, ui
 from nicewebrl import nicejax
 from nicewebrl.nicejax import new_rng, base64_npimage, make_serializable
 from tortoise import fields, models
-
+from nicewebrl.utils import retry_with_exponential_backoff
 FeedbackFn = Callable[[struct.PyTreeNode], Dict]
 
+
+logger = get_logger(__name__)
 
 def time_diff(t1, t2) -> float:
     # Convert string timestamps to datetime objects
@@ -173,6 +177,7 @@ class EnvStage(Stage):
     notify_success: bool = True
     msg_display_time: int = None
     end_on_final_timestep: bool = True
+    verbosity: int = 0
 
     def __post_init__(self):
         super().__post_init__()
@@ -262,8 +267,8 @@ class EnvStage(Stage):
         self.step_and_send_timestep(container, timestep)
 
     async def activate(self, container: ui.element):
-        print("="*30)
-        print(self.metadata)
+        if self.verbosity: logger.info("="*30)
+        if self.verbosity: logger.info(self.metadata)
         # (potentially) load stage state from memory
         stage_state = await get_latest_stage_state(
             cls=self.state_cls)
@@ -280,8 +285,8 @@ class EnvStage(Stage):
             args,
             synchronous=True):
         key = args['key']
-        keydownTime = args['keydownTime']
-        imageSeenTime = args['imageSeenTime']
+        keydownTime = args.get('keydownTime')
+        imageSeenTime = args.get('imageSeenTime')
         action_idx = self.key_to_action.get(key, -1)
         action_name = self.action_to_name.get(action_idx, key)
 
@@ -309,7 +314,7 @@ class EnvStage(Stage):
             sex=app.storage.user.get('sex'),
             **timestep_data,
         )
-        print(f'∆t: {time_diff(imageSeenTime, keydownTime)/1000.}')
+        if self.verbosity: logger.info(f'∆t: {time_diff(imageSeenTime, keydownTime)/1000.}')
         model = ExperimentData(
             stage_idx=app.storage.user['stage_idx'],
             session_id=app.storage.browser['id'],
@@ -331,6 +336,7 @@ class EnvStage(Stage):
         else:
             asyncio.create_task(model.save())
 
+    @retry_with_exponential_backoff(max_retries=3, base_delay=1, max_delay=10)
     async def finish_stage(self):
         if not self.get_user_data('started', False):
             return
@@ -363,12 +369,12 @@ class EnvStage(Stage):
         if not self.get_user_data('started', False):
             return
 
-        print("-"*10)
+        if self.verbosity: logger.info("-"*10)
         if self.get_user_data('finished', False):
-            print("finished")
+            if self.verbosity: logger.info("finished")
             return
         key = event.args['key']
-        print(f'key: {key}')
+        if self.verbosity: logger.info(f'key: {key}')
         # check if valid environment interaction
         if not key in self.key_to_action: return
 
@@ -406,7 +412,7 @@ class EnvStage(Stage):
             nepisodes=stage_state.nepisodes + timestep.first(),
             nsuccesses=stage_state.nsuccesses + success,
         )
-        print(f"nsteps: {stage_state.nsteps}, nepisodes: {stage_state.nepisodes}, nsuccesses: {stage_state.nsuccesses}")
+        if self.verbosity: logger.info(f"nsteps: {stage_state.nsteps}, nepisodes: {stage_state.nepisodes}, nsuccesses: {stage_state.nsuccesses}")
 
         if finished_noreset:
             await save_stage_state(stage_state)
@@ -444,7 +450,7 @@ class EnvStage(Stage):
         # Episode over?
         ################
         if timestep.last():
-            print("="*20)
+            if self.verbosity: logger.info("="*20)
             if not stage_finished:
                 start_notification = ui.notification(
                     'press any arrow key to start next episode',

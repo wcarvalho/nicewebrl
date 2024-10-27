@@ -1,5 +1,7 @@
+from nicewebrl.logging import get_logger
 import time
 import typing
+from datetime import datetime
 from typing import Union, Any, Callable
 from typing import get_type_hints
 from base64 import b64encode, b64decode
@@ -16,6 +18,8 @@ from PIL import Image
 
 Timestep = Any
 RenderFn = Callable[[Timestep], jax.Array]
+
+logger = get_logger(__name__)
 
 def get_rng():
     """Initializes a jax.random number generator or gets the latest if already initialized."""
@@ -69,6 +73,8 @@ def make_serializable(obj: Any):
         return {k: make_serializable(v) for k, v in obj.items()}
     elif isinstance(obj, (list, tuple)):
         return [make_serializable(v) for v in obj]
+    elif isinstance(obj, datetime):
+        return obj.isoformat()
     else:
         return obj
 
@@ -186,20 +192,20 @@ class JaxWebEnv:
 
     def precompile(self, dummy_env_params: struct.PyTreeNode) -> None:
         """Call this function to pre-compile jax functions before experiment starts."""
-        print("Compiling jax environment functions.")
+        logger.info("Compiling jax environment functions.")
         start = time.time()
         dummy_rng = jax.random.PRNGKey(0)
         self.reset = self.reset.lower(dummy_rng, dummy_env_params).compile()
         timestep = self.reset(dummy_rng, dummy_env_params)
         self.next_steps = self.next_steps.lower(dummy_rng, timestep, dummy_env_params).compile()
-        print("\ttime:", time.time()-start)
+        logger.info(f"\ttime: {time.time()-start}")
 
     def precompile_vmap_render_fn(
             self,
             render_fn: RenderFn,
             dummy_env_params: struct.PyTreeNode) -> RenderFn:
         """Call this function to pre-compile a multi-render function before experiment starts."""
-        print("Compiling multi-render function.")
+        logger.info("Compiling multi-render function.")
         start = time.time()
         vmap_render_fn = jax.jit(jax.vmap(render_fn))
         dummy_rng = jax.random.PRNGKey(0)
@@ -208,5 +214,5 @@ class JaxWebEnv:
             dummy_rng, timestep, dummy_env_params)
         vmap_render_fn = vmap_render_fn.lower(
             next_timesteps).compile()
-        print("\ttime:", time.time()-start)
+        logger.info(f"\ttime: {time.time()-start}")
         return vmap_render_fn
