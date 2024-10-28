@@ -33,6 +33,11 @@ async def check_fullscreen():
         logger.error(f'JavaScript execution timed out: {e}')
     return result
 
+def clear_element(element):
+    try:
+        element.clear()
+    except Exception as e:
+        logger.error(f'Error clearing element: {e}')
 
 async def wait_for_button_or_keypress(button, ignore_recent_press=False):
     attempt = 0
@@ -80,7 +85,7 @@ async def wait_for_button_or_keypress(button, ignore_recent_press=False):
                     logger.error(f"{attempt}. Error deleting keyboard: {str(e)}")
 
         except Exception as e:
-            logger.error(f"{attempt}. An error occurred: {str(e)}. Retrying...")
+            logger.error(f"{attempt}. Waiting for button or keypress. Error occurred: {str(e)}. Retrying...")
             attempt += 1
             await asyncio.sleep(1)  # Add a small delay before retrying
 

@@ -4,27 +4,41 @@ A simple utility for logging to files and the console. Key features:
 - prepend user_id to console logs
 - create user-specific log files with all stdout and stderr (useful for user-specific debugging) 
 
+NOTE: you only need to call setup_logging once at the beginning of your program.
+  the settings will propogate to every other usage.
+  afterwards, you just need to call `logger = logging.get_logger(__name__)` and `logger.info('some message')`, etc as usual.
+
+log format:
+- which user index, total number of users, and user_id
+- timestamp
+- logger name
+- message
+
 Usage:
 
 from nicewebrl import logging
+logger = logging.get_logger(__name__) 
+
+def log_filename_fn(log_dir, user_id):
+  return os.path.join(log_dir, f'log_{user_id}.log')
+
 logging.setup_logging(
     LOG_DIR,
-    # use whatever key you use to identify users in nicegui
+    log_filename_fn=log_filename_fn,  # optional, defaults to above
+    # use whatever key you use to identify users in nicegui's app.storage.user
     nicegui_storage_user_key='user_id'
 )
-logger = logging.get_logger('some name')
+logger = logging.get_logger('some_name')
 
 logger.info('some message')
+> (2/31) 3266458590: 2024/10/26 20:24:47 - some_name - INFO - some message
 logger.error('some error message')
+> (2/31) 3266458590: 2024/10/26 20:24:47 - some_name - ERROR - some error message
 logger.warning('some warning message')
-
-NOTE: you only need to call setup_logging once at the beginning of your program. the settings will propogate to every other usage. afterwards, you just need to call.
-
-# e.g.
-logger = logging.get_logger(__name__)
-
+> (2/31) 3266458590: 2024/10/26 20:24:47 - some_name - WARNING - some warning message
 """
 
+from typing import Optional, Callable
 import traceback
 import io
 
@@ -55,6 +69,7 @@ class UserAwareOutput(io.TextIOBase):
             self,
             console_stream: io.TextIOBase,
             log_dir: str,
+            log_filename_fn: Optional[Callable[[str, str], str]] = None,
             nicegui_storage_user_key: str = 'user_id'):
         """
         Initialize the UserAwareOutput instance.
@@ -62,7 +77,11 @@ class UserAwareOutput(io.TextIOBase):
         Args:
             console_stream (io.TextIOBase): The underlying console stream for output.
             log_dir (str): The directory where log files will be stored.
-            user_key (str, optional): The key used to identify users in the app storage. Defaults to 'user_id'.
+            log_filename_fn (Optional[Callable[[str, str], str]], optional): Function to generate log filenames.
+                Takes log_dir and user_id as arguments and returns the full file path.
+                Defaults to lambda log_dir, user_id: os.path.join(log_dir, f'log_{user_id}.log')
+            nicegui_storage_user_key (str, optional): The key used to identify users in the app storage.
+                Defaults to 'user_id'.
         """
         self.console_stream = console_stream
         self.user_key = nicegui_storage_user_key
@@ -70,6 +89,10 @@ class UserAwareOutput(io.TextIOBase):
         self.error_log = os.path.join(log_dir, 'error.log')
         self.buffers = {}  # Dictionary to store user-specific buffers
         self.user_to_idx = {}
+        if log_filename_fn is None:
+            log_filename_fn = lambda log_dir, user_id: os.path.join(log_dir, f'log_{user_id}.log')
+        self.log_filename_fn = log_filename_fn
+
 
     def _get_buffer(self, user_id):
         """
@@ -114,7 +137,7 @@ class UserAwareOutput(io.TextIOBase):
         """
         try:
             user_id = app.storage.user.get(self.user_key, None)
-            log_file = os.path.join(self.log_dir, f'log_{user_id}.log')
+            log_file = self.log_filename_fn(self.log_dir, user_id)
 
             with open(log_file, 'a') as file_stream:
                 file_stream.write(s)
@@ -254,6 +277,7 @@ def setup_logging(
         log_dir: str,
         nicegui_storage_user_key: str = 'user_id',
         watchfiles_logging: bool = False,
+        log_filename_fn: Optional[Callable[[str, str], str]] = None,
         ignored_watchfiles_dirs: tuple = ('data/', '.nicegui/')):
     """
     Set up logging configuration.
@@ -271,8 +295,20 @@ def setup_logging(
     os.makedirs(log_dir, exist_ok=True)
 
     # Create UserAwareOutput instances
-    user_aware_stdout = UserAwareOutput(sys.stdout, log_dir=log_dir, nicegui_storage_user_key=nicegui_storage_user_key)
-    user_aware_stderr = UserAwareOutput(sys.stderr, log_dir=log_dir, nicegui_storage_user_key=nicegui_storage_user_key)
+    user_aware_stdout = UserAwareOutput(
+      sys.stdout,
+      log_dir=log_dir,
+      log_filename_fn=log_filename_fn, 
+      nicegui_storage_user_key=nicegui_storage_user_key)
+    user_aware_stderr = UserAwareOutput(
+      sys.stderr,
+      log_dir=log_dir,
+      log_filename_fn=log_filename_fn, 
+      nicegui_storage_user_key=nicegui_storage_user_key)
+
+    # Redirect sys.stdout and sys.stderr
+    sys.stdout = user_aware_stdout
+    sys.stderr = user_aware_stderr
 
     # Create and configure the root logger
     root_logger = logging.getLogger()
@@ -284,22 +320,14 @@ def setup_logging(
 
     # Create handlers using UserAwareOutput
     stdout_handler = UserAwareHandler(user_aware_stdout)
-    stderr_handler = UserAwareHandler(user_aware_stderr)
 
     # Set formatting for the handlers
     formatter = logging.Formatter(
         '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         datefmt='%Y/%m/%d %H:%M:%S')
     stdout_handler.setFormatter(formatter)
-    stderr_handler.setFormatter(formatter)
-
-    # Add the handlers to the root logger
     root_logger.addHandler(stdout_handler)
-    root_logger.addHandler(stderr_handler)
 
-    # Redirect sys.stdout and sys.stderr
-    sys.stdout = user_aware_stdout
-    sys.stderr = user_aware_stderr
 
     # Configure watchfiles logger
     watchfiles_logger = logging.getLogger('watchfiles')

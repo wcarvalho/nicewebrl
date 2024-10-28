@@ -1,22 +1,23 @@
+from typing import List, Any, Callable, Dict, Optional
 
-from nicewebrl.logging import get_logger
 import asyncio
-from typing import List,Tuple, Dict
+import aiofiles
+import base64
 import copy
-from typing import Any, Callable, Dict, Optional
-import time
 import dataclasses
 from datetime import datetime
-import base64
 
 from flax import struct
 from flax import serialization
 import jax
 import jax.numpy as jnp
+import json
+import random
 
 from nicegui import app, ui
 from nicewebrl import nicejax
 from nicewebrl.nicejax import new_rng, base64_npimage, make_serializable
+from nicewebrl.logging import get_logger
 from tortoise import fields, models
 from nicewebrl.utils import retry_with_exponential_backoff
 FeedbackFn = Callable[[struct.PyTreeNode], Dict]
@@ -49,6 +50,7 @@ class ExperimentData(models.Model):
     id = fields.IntField(primary_key=True)
     session_id = fields.CharField(max_length=255, index=True)
     name = fields.TextField()
+    body = fields.TextField()
     stage_idx = fields.IntField(index=True)
     data = fields.JSONField(default=dict)
     user_data = fields.JSONField(default=dict, blank=True)
@@ -68,7 +70,54 @@ async def get_latest_stage_state(cls: struct.PyTreeNode) -> StageStateModel | No
         return deserialized
     return latest
 
-async def save_stage_state(stage_state):
+async def safe_save(
+    model: models.Model,
+    max_retries: int = 5,
+    base_delay: float = 0.3,
+    max_delay: float = 5.0,
+    synchronous: bool = True
+):
+    """Helper function to safely save model data with retries.
+    
+    Args:
+        model: Tortoise model instance to save
+        max_retries: Maximum number of retry attempts
+        base_delay: Initial delay between retries in seconds
+        max_delay: Maximum delay between retries in seconds
+        synchronous: If True, await the save; if False, create background task
+    """
+    async def _save():
+        from tortoise.exceptions import IntegrityError, OperationalError
+        
+        for attempt in range(max_retries):
+            try:
+                await model.save()
+                return
+            except (IntegrityError, OperationalError) as e:
+                if attempt == max_retries - 1:
+                    logger.error(f"Database conflict while saving {model.__class__.__name__} after {max_retries} attempts: {e}")
+                    raise
+                
+                # Add some random jitter to help prevent repeated collisions
+                jitter = random.uniform(0, 0.1)  # 0-100ms random jitter
+                delay = min(base_delay * (2 ** attempt) + jitter, max_delay)
+                logger.warning(f"Database conflict while saving {model.__class__.__name__} (attempt {attempt + 1}/{max_retries}), retrying in {delay}s: {e}")
+                await asyncio.sleep(delay)
+            except Exception as e:
+                logger.error(f"Unexpected error saving {model.__class__.__name__}: {e}")
+                raise
+
+    if synchronous:
+        await _save()
+    else:
+        asyncio.create_task(_save())
+
+async def save_stage_state(
+    stage_state, 
+    max_retries: int = 5, 
+    base_delay: float = 0.3,
+    max_delay: float = 5.0
+):
     stage_state = jax.tree_map(make_serializable, stage_state)
     serialized_data = serialization.to_bytes(stage_state)
     encoded_data = base64.b64encode(serialized_data).decode('ascii')
@@ -77,7 +126,13 @@ async def save_stage_state(stage_state):
         stage_idx=app.storage.user['stage_idx'],
         data=encoded_data,
     )
-    asyncio.create_task(model.save())
+    await safe_save(
+        model,
+        max_retries=max_retries,
+        base_delay=base_delay,
+        max_delay=max_delay,
+        synchronous=True
+    )
 
 @struct.dataclass
 class EnvStageState:
@@ -147,6 +202,7 @@ class FeedbackStage(Stage):
         model = ExperimentData(
             stage_idx=app.storage.user['stage_idx'],
             name=self.name,
+            body=self.body,
             session_id=app.storage.browser['id'],
             data=results,
             user_data=user_data,
@@ -177,7 +233,7 @@ class EnvStage(Stage):
     notify_success: bool = True
     msg_display_time: int = None
     end_on_final_timestep: bool = True
-    verbosity: int = 0
+    user_save_file_fn: Callable[[], str] = None
 
     def __post_init__(self):
         super().__post_init__()
@@ -267,8 +323,8 @@ class EnvStage(Stage):
         self.step_and_send_timestep(container, timestep)
 
     async def activate(self, container: ui.element):
-        if self.verbosity: logger.info("="*30)
-        if self.verbosity: logger.info(self.metadata)
+        logger.debug("="*30)
+        logger.debug(self.metadata)
         # (potentially) load stage state from memory
         stage_state = await get_latest_stage_state(
             cls=self.state_cls)
@@ -280,10 +336,7 @@ class EnvStage(Stage):
         self.set_user_data(started=True)
         ui.run_javascript("window.accept_keys = true;")
 
-    async def save_experiment_data(
-            self,
-            args,
-            synchronous=True):
+    async def save_experiment_data(self, args):
         key = args['key']
         keydownTime = args.get('keydownTime')
         imageSeenTime = args.get('imageSeenTime')
@@ -312,11 +365,10 @@ class EnvStage(Stage):
             user_id=app.storage.user['seed'],
             age=app.storage.user.get('age'),
             sex=app.storage.user.get('sex'),
-            **timestep_data,
         )
-        if self.verbosity: logger.info(f'∆t: {time_diff(imageSeenTime, keydownTime)/1000.}')
-        model = ExperimentData(
-            stage_idx=app.storage.user['stage_idx'],
+        logger.debug(f'∆t: {time_diff(imageSeenTime, keydownTime)/1000.}')
+        save_data = dict(
+            stage_idx=app.storage.user.get('stage_idx'),
             session_id=app.storage.browser['id'],
             data=dict(
                 image_seen_time=imageSeenTime,
@@ -326,15 +378,18 @@ class EnvStage(Stage):
                 action_idx=action_idx,
                 timelimit=self.duration,
                 timestep=encoded_timestep,
+                **timestep_data,
             ),
             user_data=user_data,
             metadata=step_metadata,
             name=self.name,
+            body=self.body,
         )
-        if synchronous:
-            await model.save()
-        else:
-            asyncio.create_task(model.save())
+
+        # Use aiofiles for async file I/O
+        async with aiofiles.open(self.user_save_file_fn(), 'a') as f:
+            # Write the dictionary as a JSON string and add a newline
+            await f.write(json.dumps(save_data) + '\n')
 
     @retry_with_exponential_backoff(max_retries=3, base_delay=1, max_delay=10)
     async def finish_stage(self):
@@ -359,8 +414,7 @@ class EnvStage(Stage):
                 key='timer',
                 keydownTime=imageSeenTime,
                 imageSeenTime=imageSeenTime,
-            ),
-            synchronous=True)
+            ))
 
     async def handle_key_press(
             self,
@@ -369,12 +423,12 @@ class EnvStage(Stage):
         if not self.get_user_data('started', False):
             return
 
-        if self.verbosity: logger.info("-"*10)
+        logger.debug("-"*10)
         if self.get_user_data('finished', False):
-            if self.verbosity: logger.info("finished")
+            logger.debug("finished")
             return
         key = event.args['key']
-        if self.verbosity: logger.info(f'key: {key}')
+        logger.debug(f'key: {key}')
         # check if valid environment interaction
         if not key in self.key_to_action: return
 
@@ -383,12 +437,11 @@ class EnvStage(Stage):
         finished_noreset = self.get_user_data('finished_noreset', False)
 
         if self.end_on_final_timestep:
-            synchronous = False
+            # synchronous = False
+            asyncio.create_task(self.save_experiment_data(event.args))
         else:
-            synchronous = finished_noreset
-        await self.save_experiment_data(
-            event.args,
-            synchronous=synchronous)
+            # synchronous = finished_noreset
+            await self.save_experiment_data(event.args)
 
         # use action to select from avaialble next time-steps
         action_idx = self.key_to_action[key]
@@ -412,7 +465,7 @@ class EnvStage(Stage):
             nepisodes=stage_state.nepisodes + timestep.first(),
             nsuccesses=stage_state.nsuccesses + success,
         )
-        if self.verbosity: logger.info(f"nsteps: {stage_state.nsteps}, nepisodes: {stage_state.nepisodes}, nsuccesses: {stage_state.nsuccesses}")
+        logger.debug(f"nsteps: {stage_state.nsteps}, nepisodes: {stage_state.nepisodes}, nsuccesses: {stage_state.nsuccesses}")
 
         if finished_noreset:
             await save_stage_state(stage_state)
@@ -450,7 +503,7 @@ class EnvStage(Stage):
         # Episode over?
         ################
         if timestep.last():
-            if self.verbosity: logger.info("="*20)
+            logger.debug("="*20)
             if not stage_finished:
                 start_notification = ui.notification(
                     'press any arrow key to start next episode',
@@ -528,3 +581,6 @@ def generate_stage_order(blocks: List[Block], block_order: List[int], rng_key: j
         stage_order.extend(block_stage_indices)
 
     return stage_order
+
+
+

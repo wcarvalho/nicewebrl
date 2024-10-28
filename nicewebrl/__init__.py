@@ -12,9 +12,9 @@ def basic_javascript_file():
   return file
 
 
-def initialize_user(debug_seed: int = 0, *kwargs):
-    if debug_seed:
-        app.storage.user['seed'] = debug_seed
+def initialize_user(seed: int = 0, *kwargs):
+    if seed:
+        app.storage.user['seed'] = seed
     else:
         app.storage.user['seed'] = app.storage.user.get(
             'seed', random.getrandbits(32))
