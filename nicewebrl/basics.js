@@ -38,6 +38,7 @@ document.addEventListener('DOMContentLoaded', async function () {
   // remove default behavior
   ////////////////
   window.debug = 0;
+  window.require_fullscreen = false;
   window.accept_keys = false;
   window.next_states = null;
 
@@ -53,7 +54,7 @@ document.addEventListener('DOMContentLoaded', async function () {
     // Handle key presses
     console.log(event.key);
     if (window.next_states !== null && window.accept_keys && event.key in window.next_states) {
-      if (await isFullscreen() || window.debug > 0) {
+      if (!window.require_fullscreen || await isFullscreen() ) {
         next_state = window.next_states[event.key];
         var imgElement = document.getElementById('stateImage');
         if (imgElement !== null) {

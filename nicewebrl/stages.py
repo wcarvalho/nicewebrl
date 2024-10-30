@@ -273,8 +273,12 @@ class EnvStage(Stage):
         """Process all items currently in the queue for current user"""
         queue = self.get_user_queue()
         while not queue.empty():
-            args = await queue.get()
-            await self.save_experiment_data(args)
+            args, timestep, user_stats = await queue.get()
+            await self.save_experiment_data(
+                args,
+                timestep=timestep,
+                user_stats=user_stats,
+            )
             queue.task_done()
 
     async def step_and_send_timestep(
@@ -284,7 +288,7 @@ class EnvStage(Stage):
             update_display: bool = True):
         #############################
         # get next images and store them client-side
-        # setup code to display next wind
+        # setup code to display next state
         #############################
         rng = new_rng()
         next_timesteps = self.web_env.next_steps(
@@ -324,6 +328,9 @@ class EnvStage(Stage):
                     if attempt % 10 == 0:  # Log every 10 attempts
                         logger.warning(f"{self.name}: Error getting imageSeenTime (attempt {attempt}): {e}")
                     await asyncio.sleep(0.1)  # Short delay between attempts
+                    if attempt > 100:
+                        ui.notify(f"Please refresh the page", type='negative')
+                        return
 
         else:
             ui.run_javascript(
@@ -394,14 +401,13 @@ class EnvStage(Stage):
             nepisodes=int(stage_state.nepisodes),
             nsuccesses=int(stage_state.nsuccesses),
         )
-    async def save_experiment_data(self, args):
+    async def save_experiment_data(self, args, timestep, user_stats):
         key = args['key']
         keydownTime = args.get('keydownTime')
         imageSeenTime = args.get('imageSeenTime')
         action_idx = self.key_to_action.get(key, -1)
         action_name = self.action_to_name.get(action_idx, key)
-
-        timestep = self.get_user_data('stage_state').timestep
+            
         timestep_data = {}
         if self.custom_data_fn is not None:
             timestep_data = self.custom_data_fn(timestep)
@@ -412,12 +418,7 @@ class EnvStage(Stage):
             serialized_timestep).decode('ascii')
 
         step_metadata = copy.deepcopy(self.metadata)
-        step_metadata.update(
-            nsteps=int(self.get_user_data('stage_state').nsteps),
-            episode_idx=int(self.get_user_data('stage_state').nepisodes),
-            nsuccesses=int(self.get_user_data('stage_state').nsuccesses),
-            type='EnvStage',
-        )
+        step_metadata.update(type='EnvStage', **user_stats)
 
         user_data = dict(
             user_id=app.storage.user['seed'],
@@ -460,7 +461,6 @@ class EnvStage(Stage):
             else:
                 logger.error(f'{name} saved file')
                 logger.error(f'stage state: {self.user_stats()}')
-                logger.error(f'env step: {timestep.state.step_num}')
                 logger.error(f"imageSeenTime={imageSeenTime}, keydownTime={keydownTime}")
                 import os; os._exit(1)
         await self.set_user_data(saved_data=True)
@@ -477,9 +477,7 @@ class EnvStage(Stage):
 
         # save experiment data so far (prior time-step + resultant action)
         # if finished, save synchronously (to avoid race condition) with next stage
-        await self.set_user_data(
-            finished_noreset=True,
-            finished=True)
+        await self.set_user_data(finished=True)
         logger.info(f"finish_stage {self.name}. stats: {self.user_stats()}")
         imageSeenTime = await ui.run_javascript('getImageSeenTime()', timeout=10)
 
@@ -490,12 +488,16 @@ class EnvStage(Stage):
         if success_notification:
             success_notification.dismiss()
 
+        stage_state = self.get_user_data('stage_state')
         await self.save_experiment_data(
             args=dict(
                 key='timer',
                 keydownTime=imageSeenTime,
                 imageSeenTime=imageSeenTime,
-            ))
+            ),
+            timestep=stage_state.timestep,
+            user_stats=self.user_stats(),
+        )
 
     async def handle_key_press(self, event, container):
         # Get or create lock for this specific user
@@ -503,38 +505,26 @@ class EnvStage(Stage):
             await self._handle_key_press(event, container)
 
     async def _handle_key_press(self, event, container):
-        if not self.get_user_data('started', False):
-            return
+        if not self.get_user_data('started', False): return
+        if self.get_user_data('finished', False): return
 
-        if self.get_user_data('finished', False):
-            #if self.verbosity: logger.info("handle_key_press: already finished")
-            return
         key = event.args['key']
         if self.verbosity: logger.info(f'handle_key_press key: {key}')
+
         # check if valid environment interaction
         if not key in self.key_to_action: return
 
-        # save experiment data so far (prior time-step + resultant action)
-        # if finished, save synchronously (to avoid race condition) with next stage
-        finished_noreset = self.get_user_data('finished_noreset', False)
-
-        if self.end_on_final_timestep:
-            synchronous = False
-        else:
-            synchronous = finished_noreset
-
-        if synchronous:
-            await self.get_user_queue().join()
-            await self.save_experiment_data(event.args)
-        else:
-            await self.get_user_queue().put(event.args)
-            asyncio.create_task(self._process_save_queue())
+        # asynchonously save experiment data by putting in a save queue
+        # save prior timestep + current event information
+        user_stats = self.user_stats()
+        timestep = self.get_user_data('stage_state').timestep
+        await self.get_user_queue().put((event.args, timestep, user_stats))
+        asyncio.create_task(self._process_save_queue())
 
         # use action to select from avaialble next time-steps
         action_idx = self.key_to_action[key]
         next_timesteps = self.get_user_data('next_timesteps')
-        timestep = jax.tree_map(
-            lambda t: t[action_idx], next_timesteps)
+        timestep = jax.tree_map(lambda t: t[action_idx], next_timesteps)
 
         episode_reset = timestep.first()
         if episode_reset:
@@ -553,10 +543,8 @@ class EnvStage(Stage):
             nsuccesses=stage_state.nsuccesses + success,
         )
 
-        if finished_noreset:
-            await save_stage_state(stage_state)
-        else:
-            asyncio.create_task(save_stage_state(stage_state))
+        # asynchronously save stage state
+        asyncio.create_task(save_stage_state(stage_state))
         await self.set_user_data(stage_state=stage_state)
 
         ################
@@ -565,34 +553,27 @@ class EnvStage(Stage):
         achieved_min_success = stage_state.nsuccesses >= self.min_success
         achieved_max_episodes = stage_state.nepisodes > self.max_episodes
         finished = (achieved_min_success or achieved_max_episodes)
-        finished = finished or self.check_finished(timestep)
-
-        # stage is finished AFTER final time-step of last episode
-        # i.e. once the episode resets
-        stage_finished = episode_reset and finished
-        await self.set_user_data(
-            finished_noreset=finished,
-            finished=stage_finished
-            )
+        stage_finished = finished or self.check_finished(timestep)
 
         ################
         # Display new data?
         ################
-        update_display = not stage_finished and episode_reset
-        if update_display:
+        if episode_reset:
             await self.wait_for_start(container, timestep)
         await self.step_and_send_timestep(
             container, timestep,
             # image is normally updated client-side
             # when episode resets, update server-side
-            update_display=update_display,
+            update_display=episode_reset,
             )
         ################
         # Episode over?
         ################
         if timestep.last():
             if self.verbosity:
-                logger.info("="*20 + "\nhandle_key_press: episode over")
+                logger.info("="*20)
+                logger.info("handle_key_press: episode over")
+            start_notification = None
             if not stage_finished:
                 start_notification = ui.notification(
                     'press any arrow key to start next episode',
@@ -611,8 +592,12 @@ class EnvStage(Stage):
             await self.set_user_data(
                 start_notification=start_notification,
                 success_notification=success_notification)
-        if self.end_on_final_timestep and finished:
+
+        if stage_finished:
+            #await self.set_user_data(finished=True)
             await self.finish_stage()
+            if self.notify_success:
+                success_notification.dismiss()
 
     async def handle_button_press(self, container): pass  # do nothing
 
