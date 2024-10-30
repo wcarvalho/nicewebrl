@@ -477,7 +477,9 @@ class EnvStage(Stage):
 
         # save experiment data so far (prior time-step + resultant action)
         # if finished, save synchronously (to avoid race condition) with next stage
-        await self.set_user_data(finished=True)
+        await self.set_user_data(
+            finished=True,
+            final_save=True)
         logger.info(f"finish_stage {self.name}. stats: {self.user_stats()}")
         imageSeenTime = await ui.run_javascript('getImageSeenTime()', timeout=10)
 
@@ -506,7 +508,22 @@ class EnvStage(Stage):
 
     async def _handle_key_press(self, event, container):
         if not self.get_user_data('started', False): return
-        if self.get_user_data('finished', False): return
+        if self.get_user_data('stage_finished', False):
+            # if already did final save, just return
+            if self.get_user_data('final_save', False): return
+
+            # did not do final save, so do so now
+            # want stage to end on keypress so that 
+            # notifications are visible at final timestep
+            await self.finish_stage()
+            # and dismiss any present notifications
+            start_notification = self.pop_user_data('start_notification')
+            if start_notification:
+                start_notification.dismiss()
+            success_notification = self.pop_user_data('success_notification')
+            if success_notification:
+                success_notification.dismiss()
+            return
 
         key = event.args['key']
         if self.verbosity: logger.info(f'handle_key_press key: {key}')
@@ -578,6 +595,10 @@ class EnvStage(Stage):
                 start_notification = ui.notification(
                     'press any arrow key to start next episode',
                     position='center', type='info', timeout=self.msg_display_time)
+            else:
+                start_notification = ui.notification(
+                    'press any arrow key to continue',
+                    position='center', type='info', timeout=self.msg_display_time)
             success_notification = None
             if self.notify_success:
                 if success:
@@ -593,11 +614,7 @@ class EnvStage(Stage):
                 start_notification=start_notification,
                 success_notification=success_notification)
 
-        if stage_finished:
-            #await self.set_user_data(finished=True)
-            await self.finish_stage()
-            if self.notify_success:
-                success_notification.dismiss()
+        await self.set_user_data(stage_finished=stage_finished)
 
     async def handle_button_press(self, container): pass  # do nothing
 
