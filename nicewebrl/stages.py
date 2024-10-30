@@ -20,6 +20,8 @@ from nicewebrl.nicejax import new_rng, base64_npimage, make_serializable
 from nicewebrl.logging import get_logger
 from tortoise import fields, models
 from nicewebrl.utils import retry_with_exponential_backoff
+from asyncio import Lock
+
 FeedbackFn = Callable[[struct.PyTreeNode], Dict]
 
 
@@ -153,6 +155,9 @@ class Stage:
 
     def __post_init__(self):
         self.user_data = {}
+        self._lock = Lock()  # Add lock for thread safety
+        self._user_locks = {}  # Dictionary to store per-user locks
+
 
     def get_user_data(self, key, value=None):
         user_seed = app.storage.user['seed']
@@ -164,23 +169,29 @@ class Stage:
         self.user_data[user_seed] = self.user_data.get(user_seed, {})
         return self.user_data[user_seed].pop(key, value)
 
-    def set_user_data(self, **kwargs):
+    async def set_user_data(self, **kwargs):
+        async with self._lock:
+            user_seed = app.storage.user['seed']
+            self.user_data[user_seed] = self.user_data.get(user_seed, {})
+            self.user_data[user_seed].update(kwargs)
+
+    def get_user_lock(self):
         user_seed = app.storage.user['seed']
-        self.user_data[user_seed] = self.user_data.get(user_seed, {})
-        self.user_data[user_seed].update(kwargs)
+        if user_seed not in self._user_locks:
+            self._user_locks[user_seed] = Lock()
+        return self._user_locks[user_seed]
 
     async def activate(self, container: ui.element):
         self.display_fn(stage=self, container=container)
 
-    async def handle_button_press(self):
-        # TODO: rename to "finish_stage"
-        self.set_user_data(finished=True)
-
     async def finish_stage(self):
-        self.set_user_data(finished=True)
+        await self.set_user_data(finished=True)
 
-    async def handle_key_press(self, e, container): pass
+    async def handle_key_press(self, e, container):
+        await self.finish_stage()
 
+    async def handle_button_press(self, container):
+        await self.finish_stage()
 
 @dataclasses.dataclass
 class FeedbackStage(Stage):
@@ -234,6 +245,7 @@ class EnvStage(Stage):
     msg_display_time: int = None
     end_on_final_timestep: bool = True
     user_save_file_fn: Callable[[], str] = None
+    verbosity: int = 0
 
     def __post_init__(self):
         super().__post_init__()
@@ -245,7 +257,27 @@ class EnvStage(Stage):
         if self.action_to_name is None:
             self.action_to_name = dict()
 
-    def step_and_send_timestep(
+        self._user_queues = {}  # new: dictionary to store per-user queues
+
+    def get_user_queue(self):
+        """Get queue for current user, creating if needed"""
+        user_seed = app.storage.user['seed']
+        if user_seed not in self._user_queues:
+            self._user_queues[user_seed] = asyncio.Queue()
+        return self._user_queues[user_seed]
+
+    async def finish_saving_user_data(self):
+        await self.get_user_queue().join()
+
+    async def _process_save_queue(self):
+        """Process all items currently in the queue for current user"""
+        queue = self.get_user_queue()
+        while not queue.empty():
+            args = await queue.get()
+            await self.save_experiment_data(args)
+            queue.task_done()
+
+    async def step_and_send_timestep(
             self,
             container,
             timestep,
@@ -266,7 +298,7 @@ class EnvStage(Stage):
 
         ui.run_javascript(js_code)
 
-        self.set_user_data(next_timesteps=next_timesteps)
+        await self.set_user_data(next_timesteps=next_timesteps)
         #############################
         # display image
         #############################
@@ -276,10 +308,26 @@ class EnvStage(Stage):
                 container=container,
                 timestep=timestep,
                 )
-            ui.run_javascript("window.imageSeenTime = new Date();")
+
+            attempt = 0
+            while True:
+                attempt += 1
+                try:
+                    # Set the timestamp in the browser
+                    await ui.run_javascript(
+                        "window.imageSeenTime = new Date();",
+                        timeout=2
+                    )
+                    # If successful, we can return immediately
+                    return
+                except Exception as e:
+                    if attempt % 10 == 0:  # Log every 10 attempts
+                        logger.warning(f"{self.name}: Error getting imageSeenTime (attempt {attempt}): {e}")
+                    await asyncio.sleep(0.1)  # Short delay between attempts
+
         else:
             ui.run_javascript(
-                "window.imageSeenTime = window.next_imageSeenTime;")
+                "window.imageSeenTime = window.next_imageSeenTime;", timeout=10)
 
     async def wait_for_start(
             self,
@@ -304,38 +352,48 @@ class EnvStage(Stage):
             nepisodes=1,
             nsteps=1,
         )
-        self.set_user_data(stage_state=stage_state)
+        await self.set_user_data(stage_state=stage_state)
         asyncio.create_task(save_stage_state(stage_state))
 
         # DISPLAY NEW EPISODE
         await self.wait_for_start(container, timestep)
-        self.step_and_send_timestep(container, timestep)
+        await self.step_and_send_timestep(container, timestep)
 
     async def load_stage(self, container: ui.element, stage_state: EnvStageState):
         rng = new_rng()
         timestep = nicejax.match_types(
             example=self.web_env.reset(rng, self.env_params),
             data=stage_state.timestep)
-        self.set_user_data(stage_state=stage_state.replace(
+        await self.set_user_data(stage_state=stage_state.replace(
             timestep=timestep),
         )
 
-        self.step_and_send_timestep(container, timestep)
+        await self.step_and_send_timestep(container, timestep)
 
     async def activate(self, container: ui.element):
-        logger.debug("="*30)
-        logger.debug(self.metadata)
-        # (potentially) load stage state from memory
-        stage_state = await get_latest_stage_state(
-            cls=self.state_cls)
+        async with self.get_user_lock():
+            if self.verbosity: logger.info("="*30)
+            if self.verbosity: logger.info(self.metadata)
+            # (potentially) load stage state from memory
+            stage_state = await get_latest_stage_state(
+                cls=self.state_cls)
 
+            if stage_state is None:
+                await self.start_stage(container)
+            else:
+                await self.load_stage(container, stage_state)
+            await self.set_user_data(started=True)
+            ui.run_javascript("window.accept_keys = true;")
+
+    def user_stats(self):
+        stage_state = self.get_user_data('stage_state')
         if stage_state is None:
-            await self.start_stage(container)
-        else:
-            await self.load_stage(container, stage_state)
-        self.set_user_data(started=True)
-        ui.run_javascript("window.accept_keys = true;")
-
+            return dict()
+        return dict(
+            nsteps=int(stage_state.nsteps),
+            nepisodes=int(stage_state.nepisodes),
+            nsuccesses=int(stage_state.nsuccesses),
+        )
     async def save_experiment_data(self, args):
         key = args['key']
         keydownTime = args.get('keydownTime')
@@ -366,7 +424,7 @@ class EnvStage(Stage):
             age=app.storage.user.get('age'),
             sex=app.storage.user.get('sex'),
         )
-        logger.debug(f'∆t: {time_diff(imageSeenTime, keydownTime)/1000.}')
+
         save_data = dict(
             stage_idx=app.storage.user.get('stage_idx'),
             session_id=app.storage.browser['id'],
@@ -387,19 +445,42 @@ class EnvStage(Stage):
         )
 
         # Use aiofiles for async file I/O
-        async with aiofiles.open(self.user_save_file_fn(), 'a') as f:
+        save_file = self.user_save_file_fn()
+        async with aiofiles.open(save_file, 'a') as f:
             # Write the dictionary as a JSON string and add a newline
             await f.write(json.dumps(save_data) + '\n')
+            name = self.metadata.get('maze', self.name)
+            if imageSeenTime is not None and keydownTime is not None:
+                if self.verbosity: 
+                    logger.info(f'{name} saved file')
+                    logger.info(f'∆t: {time_diff(imageSeenTime, keydownTime)/1000.}')
+                    logger.info(f'stage state: {self.user_stats()}')
+                    logger.info(f'env step: {timestep.state.step_num}')
 
-    @retry_with_exponential_backoff(max_retries=3, base_delay=1, max_delay=10)
+            else:
+                logger.error(f'{name} saved file')
+                logger.error(f'stage state: {self.user_stats()}')
+                logger.error(f'env step: {timestep.state.step_num}')
+                logger.error(f"imageSeenTime={imageSeenTime}, keydownTime={keydownTime}")
+                import os; os._exit(1)
+        await self.set_user_data(saved_data=True)
+
+    @retry_with_exponential_backoff(max_retries=5, base_delay=1, max_delay=10)
     async def finish_stage(self):
         if not self.get_user_data('started', False):
             return
+        if self.get_user_data('finished', False):
+            return
+
+        # Wait for any pending saves to complete
+        await self.get_user_queue().join()
+
         # save experiment data so far (prior time-step + resultant action)
         # if finished, save synchronously (to avoid race condition) with next stage
-
-        self.set_user_data(finished_noreset=True)
-        self.set_user_data(finished=True)
+        await self.set_user_data(
+            finished_noreset=True,
+            finished=True)
+        logger.info(f"finish_stage {self.name}. stats: {self.user_stats()}")
         imageSeenTime = await ui.run_javascript('getImageSeenTime()', timeout=10)
 
         start_notification = self.pop_user_data('start_notification')
@@ -416,19 +497,20 @@ class EnvStage(Stage):
                 imageSeenTime=imageSeenTime,
             ))
 
-    async def handle_key_press(
-            self,
-            event,
-            container):
+    async def handle_key_press(self, event, container):
+        # Get or create lock for this specific user
+        async with self.get_user_lock():
+            await self._handle_key_press(event, container)
+
+    async def _handle_key_press(self, event, container):
         if not self.get_user_data('started', False):
             return
 
-        logger.debug("-"*10)
         if self.get_user_data('finished', False):
-            logger.debug("finished")
+            #if self.verbosity: logger.info("handle_key_press: already finished")
             return
         key = event.args['key']
-        logger.debug(f'key: {key}')
+        if self.verbosity: logger.info(f'handle_key_press key: {key}')
         # check if valid environment interaction
         if not key in self.key_to_action: return
 
@@ -437,11 +519,16 @@ class EnvStage(Stage):
         finished_noreset = self.get_user_data('finished_noreset', False)
 
         if self.end_on_final_timestep:
-            # synchronous = False
-            asyncio.create_task(self.save_experiment_data(event.args))
+            synchronous = False
         else:
-            # synchronous = finished_noreset
+            synchronous = finished_noreset
+
+        if synchronous:
+            await self.get_user_queue().join()
             await self.save_experiment_data(event.args)
+        else:
+            await self.get_user_queue().put(event.args)
+            asyncio.create_task(self._process_save_queue())
 
         # use action to select from avaialble next time-steps
         action_idx = self.key_to_action[key]
@@ -465,13 +552,12 @@ class EnvStage(Stage):
             nepisodes=stage_state.nepisodes + timestep.first(),
             nsuccesses=stage_state.nsuccesses + success,
         )
-        logger.debug(f"nsteps: {stage_state.nsteps}, nepisodes: {stage_state.nepisodes}, nsuccesses: {stage_state.nsuccesses}")
 
         if finished_noreset:
             await save_stage_state(stage_state)
         else:
             asyncio.create_task(save_stage_state(stage_state))
-        self.set_user_data(stage_state=stage_state)
+        await self.set_user_data(stage_state=stage_state)
 
         ################
         # Stage over?
@@ -484,8 +570,10 @@ class EnvStage(Stage):
         # stage is finished AFTER final time-step of last episode
         # i.e. once the episode resets
         stage_finished = episode_reset and finished
-        self.set_user_data(finished_noreset=finished)
-        self.set_user_data(finished=stage_finished)
+        await self.set_user_data(
+            finished_noreset=finished,
+            finished=stage_finished
+            )
 
         ################
         # Display new data?
@@ -493,7 +581,7 @@ class EnvStage(Stage):
         update_display = not stage_finished and episode_reset
         if update_display:
             await self.wait_for_start(container, timestep)
-        self.step_and_send_timestep(
+        await self.step_and_send_timestep(
             container, timestep,
             # image is normally updated client-side
             # when episode resets, update server-side
@@ -503,7 +591,8 @@ class EnvStage(Stage):
         # Episode over?
         ################
         if timestep.last():
-            logger.debug("="*20)
+            if self.verbosity:
+                logger.info("="*20 + "\nhandle_key_press: episode over")
             if not stage_finished:
                 start_notification = ui.notification(
                     'press any arrow key to start next episode',
@@ -519,11 +608,13 @@ class EnvStage(Stage):
                         'failure', type='negative', position='center',
                         timeout=self.msg_display_time)
 
-            self.set_user_data(
+            await self.set_user_data(
                 start_notification=start_notification,
                 success_notification=success_notification)
         if self.end_on_final_timestep and finished:
             await self.finish_stage()
+
+    async def handle_button_press(self, container): pass  # do nothing
 
 
 @dataclasses.dataclass

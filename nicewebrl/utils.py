@@ -74,7 +74,7 @@ async def wait_for_button_or_keypress(button, ignore_recent_press=False):
 
             except asyncio.CancelledError as e:
                 logger.error(f"{attempt}. Task was cancelled. Cleaning up and retrying...")
-                logger.error(f"Error: {e}")
+                logger.error(f"Error: '{e}'")
                 continue
 
             finally:
@@ -82,11 +82,13 @@ async def wait_for_button_or_keypress(button, ignore_recent_press=False):
                 try:
                     keyboard.delete()
                 except Exception as e:
-                    logger.error(f"{attempt}. Error deleting keyboard: {str(e)}")
+                    logger.error(f"{attempt}. Error deleting keyboard: '{str(e)}'")
 
         except Exception as e:
-            logger.error(f"{attempt}. Waiting for button or keypress. Error occurred: {str(e)}. Retrying...")
+            logger.error(f"{attempt}. Waiting for button or keypress. Error occurred: '{str(e)}'. Retrying...")
             attempt += 1
+            if attempt > 10:
+                return
             await asyncio.sleep(1)  # Add a small delay before retrying
 
 

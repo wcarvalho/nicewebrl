@@ -87,6 +87,7 @@ class UserAwareOutput(io.TextIOBase):
         self.user_key = nicegui_storage_user_key
         self.log_dir = log_dir
         self.error_log = os.path.join(log_dir, 'error.log')
+        self.joint_log = os.path.join(log_dir, 'joint.log')
         self.buffers = {}  # Dictionary to store user-specific buffers
         self.user_to_idx = {}
         if log_filename_fn is None:
@@ -139,11 +140,28 @@ class UserAwareOutput(io.TextIOBase):
             user_id = app.storage.user.get(self.user_key, None)
             log_file = self.log_filename_fn(self.log_dir, user_id)
 
+            # Format the message once
+            formatted_msg = self._format_message(s, user_id)
+
+            # Write to user-specific log file
             with open(log_file, 'a') as file_stream:
-                file_stream.write(s)
+                file_stream.write(formatted_msg)
+                file_stream.flush()
+            
+            # Write to joint log
+            with open(self.joint_log, 'a') as file_stream:
+                file_stream.write(formatted_msg)
                 file_stream.flush()
 
-            return self._write_to_buffer(s, user_id)
+            # Write to console buffer
+            buffer = self._get_buffer(user_id)
+            buffer.write(formatted_msg)
+            if s.endswith('\n'):
+                output = buffer.getvalue()
+                self.console_stream.write(output)
+                buffer.truncate(0)
+                buffer.seek(0)
+            return len(formatted_msg)
         except Exception as e:
             if 'app.storage.user' in str(e):
                 # Silently ignore this specific error and fall back to global write
@@ -158,24 +176,26 @@ class UserAwareOutput(io.TextIOBase):
         """
         Write a string to the global buffer.
         """
-        return self._write_to_buffer(s, 'global')
-
-    def _write_to_buffer(self, s: str, user_id: str) -> int:
-        """
-        Write a string to a specific buffer and flush if necessary..
-        """
-        buffer = self._get_buffer(user_id)
+        buffer = self._get_buffer('global')
         buffer.write(s)
         if s.endswith('\n'):
             output = buffer.getvalue()
-            if user_id != 'global' and output.strip():
-                idx = self.user_to_idx[user_id]
-                output = f"({idx}/{self.nusers}) {user_id}: {output}"
             self.console_stream.write(output)
             buffer.truncate(0)
             buffer.seek(0)
         return len(s)
 
+    def _format_message(self, s: str, user_id: str) -> str:
+        """
+        Format a message with user information if applicable.
+        """
+        self._get_buffer(user_id)
+        if user_id != 'global' and s.strip():
+            idx = self.user_to_idx[user_id]
+            stage_idx = app.storage.user.get('stage_idx')
+            nstages = app.storage.user.get('nstages')
+            return f"user {idx}/{self.nusers} |{user_id} |stage {stage_idx}/{nstages}| {s}"
+        return s
     def flush(self):
         """
         Flush all buffers, writing their contents to the console stream.
@@ -184,8 +204,7 @@ class UserAwareOutput(io.TextIOBase):
             for user_id, buffer in self.buffers.items():
                 output = buffer.getvalue()
                 if output:
-                    if user_id != 'global' and output.strip():
-                        output = f"{user_id}: {output}"
+                    output = self._format_message(output, user_id)
                     self.console_stream.write(output)
                     buffer.truncate(0)
                     buffer.seek(0)
@@ -308,7 +327,7 @@ def setup_logging(
 
     # Redirect sys.stdout and sys.stderr
     sys.stdout = user_aware_stdout
-    sys.stderr = user_aware_stderr
+    #sys.stderr = user_aware_stderr
 
     # Create and configure the root logger
     root_logger = logging.getLogger()
@@ -324,7 +343,8 @@ def setup_logging(
     # Set formatting for the handlers
     formatter = logging.Formatter(
         '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        datefmt='%Y/%m/%d %H:%M:%S')
+        #datefmt='%Y/%m/%d %H:%M:%S'
+        )
     stdout_handler.setFormatter(formatter)
     root_logger.addHandler(stdout_handler)
 
