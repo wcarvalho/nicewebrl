@@ -8,6 +8,7 @@ from nicewebrl.logging import get_logger
 logger = get_logger(__name__)
 
 async def toggle_fullscreen():
+  logger.info("Toggling fullscreen")
   await ui.run_javascript('''
     return (async () => {
         if (!document.fullscreenElement) {

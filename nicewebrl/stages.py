@@ -182,7 +182,7 @@ class Stage:
         return self._user_locks[user_seed]
 
     async def activate(self, container: ui.element):
-        self.display_fn(stage=self, container=container)
+        await self.display_fn(stage=self, container=container)
 
     async def finish_stage(self):
         await self.set_user_data(finished=True)
@@ -307,7 +307,7 @@ class EnvStage(Stage):
         # display image
         #############################
         if update_display:
-            self.display_fn(
+            await self.display_fn(
                 stage=self,
                 container=container,
                 timestep=timestep,
@@ -462,7 +462,13 @@ class EnvStage(Stage):
                 logger.error(f'{name} saved file')
                 logger.error(f'stage state: {self.user_stats()}')
                 logger.error(f"imageSeenTime={imageSeenTime}, keydownTime={keydownTime}")
-                import os; os._exit(1)
+                ui.notification(
+                    "Error: Stage unexpectedly ending early",
+                    type='negative')
+                await self.set_user_data(
+                    finished=True,
+                    final_save=True)
+                #import os; os._exit(1)
         await self.set_user_data(saved_data=True)
 
     @retry_with_exponential_backoff(max_retries=5, base_delay=1, max_delay=10)
@@ -568,7 +574,7 @@ class EnvStage(Stage):
         # Stage over?
         ################
         achieved_min_success = stage_state.nsuccesses >= self.min_success
-        achieved_max_episodes = stage_state.nepisodes > self.max_episodes
+        achieved_max_episodes = stage_state.nepisodes >= self.max_episodes and timestep.last()
         finished = (achieved_min_success or achieved_max_episodes)
         stage_finished = finished or self.check_finished(timestep)
 
