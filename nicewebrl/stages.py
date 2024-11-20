@@ -1,4 +1,4 @@
-from typing import List, Any, Callable, Dict, Optional
+from typing import List, Any, Callable, Dict, Optional, Union
 
 import asyncio
 import aiofiles
@@ -200,6 +200,7 @@ class FeedbackStage(Stage):
     I assume that the display_fn will return once user data is collected and the stage is over. The display_fn should return a dictionary collected data. This is added to the data field of the ExperimentData object.
     """
     next_button: bool = False
+    user_save_file_fn: Callable[[], str] = None
 
     async def activate(self, container: ui.element):
         results = await self.display_fn(stage=self, container=container)
@@ -210,7 +211,8 @@ class FeedbackStage(Stage):
         )
         metadata = copy.deepcopy(self.metadata)
         metadata['type'] = 'FeedbackStage'
-        model = ExperimentData(
+
+        save_data = dict(
             stage_idx=app.storage.user['stage_idx'],
             name=self.name,
             body=self.body,
@@ -219,7 +221,10 @@ class FeedbackStage(Stage):
             user_data=user_data,
             metadata=metadata,
         )
-        await model.save()
+        save_file = self.user_save_file_fn()
+        async with aiofiles.open(save_file, 'a') as f:
+            # Write the dictionary as a JSON string and add a newline
+            await f.write(json.dumps(save_data) + '\n')
         await self.finish_stage()
 
 
@@ -628,7 +633,7 @@ class EnvStage(Stage):
 @dataclasses.dataclass
 class Block:
     stages: List[Stage]
-    randomize: bool = False
+    randomize: Union[bool, List[bool]] = False
     metadata: Dict[str, Any] = dataclasses.field(default_factory=dict)
 
 
@@ -665,17 +670,25 @@ def generate_stage_order(blocks: List[Block], block_order: List[int], rng_key: j
         block_stage_indices = block_indices[block_idx]
 
         if block.randomize:
-            eval_indices = [i for i, stage in enumerate(block.stages)
-                            if isinstance(stage, EnvStage) and stage.metadata.get('eval', False)]
-            non_eval_indices = [i for i in range(len(block.stages)) if i not in eval_indices]
+            if isinstance(block.randomize, bool):
+                randomize = [True]*len(block.stages)
+            else:
+                randomize = block.randomize
+                
+            indices = jnp.arange(len(block.stages))
+            mask = jnp.array(randomize)
 
-            if eval_indices:
-                rng_key, subkey = jax.random.split(rng_key)
-                eval_indices = jax.random.permutation(subkey, jnp.array(eval_indices)).tolist()
+            # Get randomizable indices
+            random_indices = indices[mask]
 
-            # Combine non-eval indices (in original order) with randomized eval indices
-            randomized_indices = non_eval_indices + eval_indices
-            block_stage_indices = [block_stage_indices[i] for i in randomized_indices]
+            # Permute the randomizable indices
+            rng_key, subkey = jax.random.split(rng_key)
+            random_indices = jax.random.permutation(subkey, random_indices)
+
+            # Combine back together
+            permuted = indices.at[mask].set(random_indices)
+
+            block_stage_indices = [block_stage_indices[i] for i in permuted]
 
         stage_order.extend(block_stage_indices)
 

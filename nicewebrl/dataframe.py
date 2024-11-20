@@ -32,6 +32,13 @@ class DataFrame(object):
         self._episodes = episodes
         self._index_key = index_key
 
+    def reindex(self):
+        df = self._df
+        if "index" in df.columns:
+            df = df.drop("index")
+        df = df.with_row_count("index")
+        return DataFrame(df, self._episodes, self._index_key)
+
     # provide proxy access to regular attributes of wrapped object
     def __getattr__(self, name):
         """
@@ -41,11 +48,28 @@ class DataFrame(object):
             name: The attribute name to access.
         
         Returns:
-            The attribute value from the wrapped DataFrame.
+            The attribute value from the wrapped DataFrame, with methods wrapped to handle DataFrame outputs.
         """
-        return getattr(self._df, name)
+        attr = getattr(self._df, name)
+        
+        if callable(attr):
+            # If it's a method, wrap it to check its output
+            def wrapped_method(*args, **kwargs):
+                result = attr(*args, **kwargs)
+                if isinstance(result, pl.DataFrame):
+                    idxs = np.array(result[self._index_key])
+                    episodes = [self._episodes[idx] for idx in idxs]
+                    return DataFrame(result, episodes, index_key=self._index_key)
+                return result
+            return wrapped_method
+        
+        return attr
 
-    def filter(self, episode_filter: Optional[EpisodeFilter] = None, **kwargs):
+    def filter(self,
+               *args,
+               episode_filter: Optional[EpisodeFilter] = None,
+               reindex: Optional[bool]=True,
+               **kwargs):
         """
         Filter the DataFrame and corresponding episodes based on given conditions.
         
@@ -55,18 +79,20 @@ class DataFrame(object):
         Returns:
             A new DataFrame object with filtered data and episodes.
         """
-        if len(kwargs) == 0:
+        if len(args) == 0 and len(kwargs) == 0:
             assert episode_filter is not None, 'need either episode_filter or kwargs for dataframe filter'
             return self._filter_episodes(episode_filter)
 
-        df = self._df.filter(**kwargs)
+        df = self._df.filter(*args, **kwargs)
         idxs = np.array(df[self._index_key])
         episodes = [self._episodes[idx] for idx in idxs]
 
         df = DataFrame(
             df=df,
             episodes=episodes,
-            index_key=self._index_key)
+            index_key=self._index_key,
+            reindex=reindex
+        )
 
         if episode_filter is not None:
             df = df._filter_episodes(episode_filter)
@@ -270,3 +296,18 @@ class DataFrame(object):
             The specified column from the wrapped DataFrame.
         """
         return self._df[key]
+
+
+def concat_list(*dfs: List[DataFrame]) -> DataFrame:
+    """Concatenate multiple DataFrame objects into a single DataFrame.
+    """
+    _dfs = [df._df for df in dfs]  # Extract polars DataFrames
+
+    episodes = []
+    for df in dfs:  # Concatenate episode lists
+        episodes.extend(df.episodes)
+
+    return DataFrame(
+        df=pl.concat(_dfs, how="diagonal_relaxed"),
+        episodes=episodes
+    )

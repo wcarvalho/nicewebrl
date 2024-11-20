@@ -3,7 +3,7 @@ requires = ["setuptools>=45", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "NiceWebRL"
+name = "nicewebrl"
 version = "0.0.2"
 authors = [
     {name = "Wilka Carvalho", email = "wcarvalho92@gmail.com"},
