@@ -7,10 +7,10 @@ Python library for quickly making interactive RL Apps with [NiceGUI](https://nic
 # pip install
 pip install git+https://github.com/wcarvalho/nicewebrl
 
-# more manauly
+# more manauly (first clone then)
 conda create -n nicewebrl python=3.10 pip wheel -y
 conda activate nicewebrl
-pip install -r requirements.tx
+pip install -e .
 ```
 
 

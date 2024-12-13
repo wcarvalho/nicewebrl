@@ -230,6 +230,33 @@ class FeedbackStage(Stage):
 
 @dataclasses.dataclass
 class EnvStage(Stage):
+    """A stage class for handling interactive environment episodes.
+
+    This class manages the interaction between a user and an environment, handling
+    state transitions, user inputs, and data collection.
+
+    Args:
+        instruction (str): Text instructions shown to the user for this stage.
+        max_episodes (Optional[int]): Maximum number of episodes allowed before stage completion.
+        min_success (Optional[int]): Minimum number of successful episodes required to complete stage.
+        web_env (Any): The environment instance that handles state transitions and interactions.
+        env_params (struct.PyTreeNode): Parameters for the environment.
+        render_fn (Callable): Function to render the environment state as an image.
+        reset_display_fn (Callable): Function called to reset the display between episodes.
+        vmap_render_fn (Callable): Vectorized version of render_fn for batch processing.
+        evaluate_success_fn (Callable): Function that takes a timestep and returns 1 for success, 0 for failure.
+        check_finished (Callable): Additional function to check if stage should end (beyond max_episodes/min_success).
+        custom_data_fn (Callable): Optional function to extract additional data from timesteps for logging.
+        state_cls (EnvStageState): Class used to store the stage's state information.
+        action_to_key (Dict[int, str]): Mapping from action indices to keyboard keys.
+        action_to_name (Dict[int, str]): Optional mapping from action indices to human-readable names.
+        next_button (bool): Whether to show a "next" button (default False).
+        notify_success (bool): Whether to show success/failure notifications.
+        msg_display_time (int): How long to display notification messages (in milliseconds).
+        end_on_final_timestep (bool): Whether to end the stage on the final timestep.
+        user_save_file_fn (Callable[[], str]): Function that returns the path to save user data.
+        verbosity (int): Level of logging verbosity (0 for minimal, higher for more).
+    """
 
     instruction: str = 'instruction'
     max_episodes: Optional[int] = 10
@@ -237,14 +264,14 @@ class EnvStage(Stage):
     web_env: Any = None
     env_params: struct.PyTreeNode = None
     render_fn: Callable = None
-    reset_display_fn: Callable = None
-    vmap_render_fn: Callable = None
-    evaluate_success_fn: Callable = lambda t: 0
-    check_finished: Callable = lambda t: False
-    custom_data_fn: Callable = None
-    state_cls: EnvStageState = None
-    action_to_key: Dict[int, str] = None
-    action_to_name: Dict[int, str] = None
+    reset_display_fn: Optional[Callable] = None
+    vmap_render_fn: Optional[Callable] = None
+    evaluate_success_fn: Callable = None
+    check_finished: Optional[Callable] = None
+    custom_data_fn: Optional[Callable] = None
+    state_cls: Optional[EnvStageState] = None
+    action_keys: Optional[Dict[int, str]] = None
+    action_to_name: Optional[List[str]] = None
     next_button: bool = False
     notify_success: bool = True
     msg_display_time: int = None
@@ -258,9 +285,17 @@ class EnvStage(Stage):
             self.vmap_render_fn = self.web_env.precompile_vmap_render_fn(
                 self.render_fn, self.env_params)
 
-        self.key_to_action = {k: a for a, k in self.action_to_key.items()}
+        self.key_to_action = {k: a for a, k in enumerate(self.action_keys)}
         if self.action_to_name is None:
             self.action_to_name = dict()
+        else:
+            self.action_to_name = {k: v for k, v in enumerate(self.action_to_name)}
+
+        if self.user_save_file_fn is None:
+            self.user_save_file_fn = lambda: f'data/user={app.storage.user.get("seed")}.json'
+        
+        if self.check_finished is None:
+            self.check_finished = lambda timestep: False
 
         self._user_queues = {}  # new: dictionary to store per-user queues
 
@@ -301,7 +336,7 @@ class EnvStage(Stage):
         next_images = self.vmap_render_fn(next_timesteps)
 
         next_images = {
-            self.action_to_key[idx]: base64_npimage(image) for idx, image in enumerate(next_images)}
+            self.action_keys[idx]: base64_npimage(image) for idx, image in enumerate(next_images)}
 
         js_code = f"window.next_states = {next_images};"
 
@@ -412,7 +447,7 @@ class EnvStage(Stage):
         imageSeenTime = args.get('imageSeenTime')
         action_idx = self.key_to_action.get(key, -1)
         action_name = self.action_to_name.get(action_idx, key)
-            
+
         timestep_data = {}
         if self.custom_data_fn is not None:
             timestep_data = self.custom_data_fn(timestep)

@@ -311,3 +311,6 @@ def concat_list(*dfs: List[DataFrame]) -> DataFrame:
         df=pl.concat(_dfs, how="diagonal_relaxed"),
         episodes=episodes
     )
+
+
+concat_dataframes = concat_list

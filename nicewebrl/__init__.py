@@ -1,39 +1,36 @@
-import jax
-import jax.numpy as jnp
-from nicegui import app
-import os.path
-import random
-from datetime import datetime
 
-def basic_javascript_file():
-  current_file_path = os.path.abspath(__file__)
-  current_directory = os.path.dirname(current_file_path)
-  file = f"{current_directory}/basics.js"
-  return file
+from nicewebrl.dataframe import DataFrame
+from nicewebrl.dataframe import concat_dataframes
+
+from nicewebrl.utils import toggle_fullscreen
+from nicewebrl.utils import check_fullscreen
+from nicewebrl.utils import clear_element
+from nicewebrl.utils import wait_for_button_or_keypress
+from nicewebrl.utils import retry_with_exponential_backoff
+from nicewebrl.utils import basic_javascript_file
+from nicewebrl.utils import initialize_user
+from nicewebrl.utils import get_user_session_minutes
+
+from nicewebrl.nicejax import get_rng
+from nicewebrl.nicejax import new_rng
+from nicewebrl.nicejax import match_types
+from nicewebrl.nicejax import make_serializable
+from nicewebrl.nicejax import deserialize
+from nicewebrl.nicejax import deserialize_bytes
+from nicewebrl.nicejax import base64_npimage
+from nicewebrl.nicejax import StepType
+from nicewebrl.nicejax import TimeStep
+from nicewebrl.nicejax import TimestepWrapper
+from nicewebrl.nicejax import JaxWebEnv
+
+from nicewebrl.stages import EnvStageState
+from nicewebrl.stages import Stage
+from nicewebrl.stages import FeedbackStage
+from nicewebrl.stages import EnvStage
+from nicewebrl.stages import Block
+from nicewebrl.stages import prepare_blocks
+from nicewebrl.stages import generate_stage_order
 
 
-def initialize_user(seed: int = 0, *kwargs):
-    if seed:
-        app.storage.user['seed'] = seed
-    else:
-        app.storage.user['seed'] = app.storage.user.get(
-            'seed', random.getrandbits(32))
-
-    app.storage.user['rng_splits'] = app.storage.user.get('rng_splits', 0)
-    if 'rng_key' not in app.storage.user:
-        rng_key = jax.random.PRNGKey(app.storage.user['seed'])
-        app.storage.user['rng_key'] = rng_key.tolist()
-        app.storage.user['init_rng_key'] = app.storage.user['rng_key']
-    app.storage.user['session_start'] = app.storage.user.get(
-        'session_start',
-        datetime.now().isoformat())
-    app.storage.user['session_duration'] = 0
-
-
-def get_user_session_minutes():
-    start_time = datetime.fromisoformat(app.storage.user['session_start'])
-    current_time = datetime.now()
-    duration = current_time - start_time
-    minutes_passed = duration.total_seconds() / 60
-    app.storage.user['session_duration'] = minutes_passed
-    return minutes_passed
+from nicewebrl.logging import get_logger
+from nicewebrl.logging import setup_logging

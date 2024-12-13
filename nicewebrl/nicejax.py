@@ -1,8 +1,11 @@
-from nicewebrl.logging import get_logger
+
+from functools import partial
+
 import time
 import typing
 from datetime import datetime
-from typing import Union, Any, Callable
+from typing import Optional
+from typing import Union, Any, Callable, Tuple
 from typing import get_type_hints
 from base64 import b64encode, b64decode
 from flax import struct
@@ -16,6 +19,7 @@ import random
 from nicegui import app, ui
 from PIL import Image
 
+from nicewebrl.logging import get_logger
 Timestep = Any
 RenderFn = Callable[[Timestep], jax.Array]
 
@@ -166,19 +170,140 @@ def deserialize_bytes(
 def base64_npimage(image: np.ndarray):
     image = np.asarray(image)
     buffer = io.BytesIO()
-    Image.fromarray(image.astype('uint8')).save(buffer, format="JPEG")
+    # Convert to uint8 if float, keep as is if already uint
+    if image.dtype.kind == 'f':
+        image = (image * 255).clip(0, 255).astype('uint8')
+    elif image.dtype != np.uint8:
+        image = image.astype('uint8')
+    Image.fromarray(image).save(buffer, format="JPEG")
     encoded_image = b64encode(buffer.getvalue()).decode('ascii')
     return 'data:image/jpeg;base64,' + encoded_image
 
+
+class StepType(jnp.uint8):
+    FIRST: jax.Array = jnp.asarray(0, dtype=jnp.uint8)
+    MID: jax.Array = jnp.asarray(1, dtype=jnp.uint8)
+    LAST: jax.Array = jnp.asarray(2, dtype=jnp.uint8)
+
+
+class TimeStep(struct.PyTreeNode):
+    state: struct.PyTreeNode
+
+    step_type: StepType
+    reward: jax.Array
+    discount: jax.Array
+    observation: jax.Array
+
+    def first(self):
+        return self.step_type == StepType.FIRST
+
+    def mid(self):
+        return self.step_type == StepType.MID
+
+    def last(self):
+        return self.step_type == StepType.LAST
+
+
+class TimestepWrapper(object):
+    """."""
+
+    def __init__(
+            self,
+            env,
+            autoreset: bool = True,
+    ):
+        self._env = env
+        self._autoreset = autoreset
+
+    # provide proxy access to regular attributes of wrapped object
+    def __getattr__(self, name):
+        return getattr(self._env, name)
+
+    def reset(
+        self,
+        key: jax.random.PRNGKey,
+        params: Optional[struct.PyTreeNode] = None
+    ) -> Tuple[TimeStep, dict]:
+        obs, state = self._env.reset(key, params)
+        # Get shape from first leaf of obs, assuming it's a batch dimension
+        first_leaf = jax.tree_util.tree_leaves(obs)[0]
+        shape = first_leaf.shape[0:1] if first_leaf.ndim > 1 else ()
+        timestep = TimeStep(
+            state=state,
+            observation=obs,
+            discount=jnp.ones(shape, dtype=jnp.float32),
+            reward=jnp.zeros(shape, dtype=jnp.float32),
+            step_type=jnp.full(shape, StepType.FIRST,
+                               dtype=StepType.FIRST.dtype),
+        )
+        return timestep
+
+    def step(
+        self,
+        key: jax.random.PRNGKey,
+        prior_timestep: TimeStep,
+        action: Union[int, float],
+        params: Optional[struct.PyTreeNode] = None,
+    ) -> Tuple[TimeStep, dict]:
+
+        def env_step(prior_timestep_):
+          obs, state, reward, done, info = self._env.step(
+              key, prior_timestep_.state, action, params
+          )
+          del info
+          return TimeStep(
+              state=state,
+              observation=obs,
+              discount=1. - done.astype(jnp.float32),
+              reward=reward,
+              step_type=jnp.where(done, StepType.LAST, StepType.MID),
+          )
+
+        if self._autoreset:
+          # if prior was last, reset
+          # otherwise, do regular step
+          timestep = jax.lax.cond(
+              prior_timestep.last(),
+              lambda: self.reset(key, params),
+              lambda: env_step(prior_timestep),
+          )
+        else:
+           timestep = env_step(prior_timestep)
+        return timestep
+
+def try_to_get_actions(env):
+    if hasattr(env, 'num_actions'):
+        if callable(getattr(env, 'num_actions')):
+            num_actions = env.num_actions()
+        else:
+            num_actions = env.num_actions
+    elif hasattr(env, 'action_space'):
+        if callable(getattr(env, 'action_space')):
+            num_actions = env.action_space().n
+        else:
+            num_actions = env.action_space.n
+    else:
+        raise ValueError("Cannot determine number of actions for environment. please provide actions")
+    actions = jnp.arange(num_actions)
+    return actions
+
 class JaxWebEnv:
-    def __init__(self, env):
+    def __init__(self, env, actions=None):
+        """The main purpose of this class is to precompile jax functions before experiment starts."""
         self.env = env
         assert hasattr(env, 'reset'), 'env needs reset function'
         assert hasattr(env, 'step'), 'env needs step function'
 
-        num_actions = env.num_actions()
+        if actions is None:
+            actions = try_to_get_actions(env)
+        num_actions = actions.shape[0]
+
+        #@partial(jax.jit, static_argnums=(1,))
+        def reset(rng, params):
+            return env.reset(rng, params)
+
+        #@partial(jax.jit, static_argnums=(2,))
         def next_steps(rng, timestep, env_params):
-            actions = jnp.arange(num_actions)
             rngs = jax.random.split(rng, num_actions)
 
             # vmap over rngs and actions. re-use timestep
@@ -187,7 +312,7 @@ class JaxWebEnv:
             )(rngs, timestep, actions, env_params)
             return timesteps
 
-        self.reset = jax.jit(self.env.reset)
+        self.reset = jax.jit(reset)
         self.next_steps = jax.jit(next_steps)
 
     def precompile(self, dummy_env_params: struct.PyTreeNode) -> None:
@@ -197,7 +322,8 @@ class JaxWebEnv:
         dummy_rng = jax.random.PRNGKey(0)
         self.reset = self.reset.lower(dummy_rng, dummy_env_params).compile()
         timestep = self.reset(dummy_rng, dummy_env_params)
-        self.next_steps = self.next_steps.lower(dummy_rng, timestep, dummy_env_params).compile()
+        self.next_steps = self.next_steps.lower(
+            dummy_rng, timestep, dummy_env_params).compile()
         logger.info(f"\ttime: {time.time()-start}")
 
     def precompile_vmap_render_fn(
@@ -216,3 +342,4 @@ class JaxWebEnv:
             next_timesteps).compile()
         logger.info(f"\ttime: {time.time()-start}")
         return vmap_render_fn
+

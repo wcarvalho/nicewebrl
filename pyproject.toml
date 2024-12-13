@@ -20,11 +20,18 @@ dependencies = [
     "nicegui",
     "tortoise-orm",
     "Pillow",
-    "jax>=0.4.16",
+    "jax>=0.4.16,<=0.4.20",
+    "jaxlib>=0.4.16,<=0.4.20",
     "distrax>=0.1.5",
     "flax>=0.8.2",
     "numpy>=1.26.4,<2",
     "polars",
+]
+
+[project.optional-dependencies]
+examples = [
+    "craftax",
+    "python-dotenv",
 ]
 
 [project.urls]
