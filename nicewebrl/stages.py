@@ -29,6 +29,14 @@ FeedbackFn = Callable[[struct.PyTreeNode], Dict]
 
 logger = get_logger(__name__)
 
+Timestep = struct.PyTreeNode
+Image = jnp.ndarray
+
+TimestepCallFn = Callable[[Timestep], None]
+RenderFn = Callable[[Timestep], Image]
+
+DisplayFn = Callable[["Stage", ui.element, Timestep], None]
+
 def time_diff(t1, t2) -> float:
     # Convert string timestamps to datetime objects
     t1 = datetime.strptime(t1, '%Y-%m-%dT%H:%M:%S.%fZ')
@@ -136,7 +144,6 @@ async def save_stage_state(
         max_delay=max_delay,
         synchronous=True
     )
-    logger.info(f"Saved stage state to database")
 
 class EnvStageState(struct.PyTreeNode):
     timestep: struct.PyTreeNode
@@ -149,7 +156,7 @@ class Stage:
     name: str = 'stage'
     body: str = 'stage'
     metadata: Dict[str, Any] = dataclasses.field(default_factory=dict)
-    display_fn: Callable = None
+    display_fn: DisplayFn = None
     finished: bool = False
     next_button: bool = True
     duration: int = None
@@ -260,15 +267,15 @@ class EnvStage(Stage):
     """
 
     instruction: str = 'instruction'
-    max_episodes: Optional[int] = 10
     min_success: Optional[int] = 1
-    web_env: Any = None
+    max_episodes: Optional[int] = 10
+    web_env: nicejax.JaxWebEnv = None
     env_params: struct.PyTreeNode = None
-    render_fn: Callable = None
-    reset_display_fn: Optional[Callable] = None
+    render_fn: RenderFn = None
+    reset_display_fn: Optional[DisplayFn] = None
     vmap_render_fn: Optional[Callable] = None
-    evaluate_success_fn: Callable = None
-    check_finished: Optional[Callable] = None
+    evaluate_success_fn: TimestepCallFn = None
+    check_finished: Optional[TimestepCallFn] = None
     custom_data_fn: Optional[Callable] = None
     state_cls: Optional[EnvStageState] = None
     action_keys: Optional[Dict[int, str]] = None
@@ -276,8 +283,7 @@ class EnvStage(Stage):
     next_button: bool = False
     notify_success: bool = True
     msg_display_time: int = None
-    end_on_final_timestep: bool = True
-    user_save_file_fn: Callable[[], str] = None
+    user_save_file_fn: Optional[Callable[[], str]] = None
     verbosity: int = 0
 
     def __post_init__(self):
@@ -530,9 +536,11 @@ class EnvStage(Stage):
 
         # Use aiofiles for async file I/O
         save_file = self.user_save_file_fn()
-        async with aiofiles.open(save_file, 'a') as f:
-            # Write the dictionary as a JSON string and add a newline
-            await f.write(json.dumps(save_data) + '\n')
+        async with aiofiles.open(save_file, 'ab') as f:  # Note: open in binary mode
+            # Use msgpack to serialize the data, including bytes
+            packed_data = msgpack.packb(save_data)
+            await f.write(packed_data)
+            await f.write(b'\n')  # Add newline in binary mode
             name = self.metadata.get('maze', self.name)
             if imageSeenTime is not None and keydownTime is not None:
                 stage_state = self.get_user_data('stage_state')
@@ -678,8 +686,9 @@ class EnvStage(Stage):
         ################
         if timestep.last():
             if self.verbosity:
-                logger.info("="*20)
-                logger.info("handle_key_press: episode over")
+                logger.info("-"*20)
+                logger.info("episode over")
+                logger.info("-"*20)
             start_notification = None
             if not stage_finished:
                 start_notification = ui.notification(

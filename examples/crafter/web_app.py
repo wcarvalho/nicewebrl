@@ -69,7 +69,7 @@ async def create_button_and_wait(
       handle_button_press_fn: Callable[[], Awaitable[None]]):
     """This function will create a button and wait for a button or key press before proceeding"""
     with container:
-      container.clear()
+      nicewebrl.clear_element(container)
       button = ui.button('Next page').bind_visibility_from(
           stage, 'next_button')
       await wait_for_button_or_keypress(button)
@@ -129,16 +129,16 @@ async def start_experiment(meta_container, stage_container, button_container):
       stage = environment.all_stages[stage_idx]
 
       logger.info("="*30)
-      logger.info(f"Began {stage.name}")
+      logger.info(f"Began stage '{stage.name}'")
       # activate stage
       await run_stage(stage, stage_container, button_container)
-      logger.info(f"Finished {stage.name}")
+      logger.info(f"Finished stage '{stage.name}'")
 
       # wait for any saves to finish before updating stage
       # very important, otherwise may lose data
       if isinstance(stage, stages.EnvStage):
         await stage.finish_saving_user_data()
-        logger.info(f"Saved data for {stage.name}")
+        logger.info(f"Saved data for stage '{stage.name}'")
 
       # update stage index
       async with get_user_lock():
@@ -148,8 +148,15 @@ async def start_experiment(meta_container, stage_container, button_container):
       if app.storage.user['stage_idx'] >= len(environment.all_stages):
           break
 
-  #await finish_experiment(meta_container, stage_container, button_container)
+  await finish_experiment(meta_container, stage_container, button_container)
 
+async def finish_experiment(meta_container, stage_container, button_container):
+    # NOTE: you can do things like saving data here
+    nicewebrl.clear_element(meta_container)
+    nicewebrl.clear_element(stage_container)
+    nicewebrl.clear_element(button_container)
+    with meta_container:
+      ui.markdown("# Experiment over")
 
 async def run_stage(stage, stage_container, button_container):
   """Runs and Environment Stage
@@ -204,7 +211,7 @@ async def run_stage(stage, stage_container, button_container):
   await stage.set_user_data(local_handle_key_press=local_handle_key_press)
 
   with button_container.style('align-items: center;'):
-      button_container.clear()
+      nicewebrl.clear_element(button_container)
 
       ####################
       # Button to go to next page
@@ -214,7 +221,7 @@ async def run_stage(stage, stage_container, button_container):
         await create_button_and_wait(stage, next_button_container, handle_button_press)
 
   await stage_over_event.wait()
-  button_container.clear()
+  nicewebrl.clear_element(button_container)
 
 
 #####################################
