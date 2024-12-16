@@ -6,10 +6,11 @@ from nicegui import ui, app
 from flax import struct
 from craftax.craftax.renderer import render_craftax_pixels
 from craftax.craftax_env import make_craftax_env_from_name
-from craftax.craftax.constants import Action, BLOCK_PIXEL_SIZE_IMG
+from craftax.craftax.constants import Action, BLOCK_PIXEL_SIZE_HUMAN
 from craftax.craftax import craftax_state
 
 
+import nicewebrl
 from nicewebrl import JaxWebEnv, base64_npimage, TimestepWrapper
 from nicewebrl import Stage, EnvStage, EnvStageState
 from nicewebrl import get_logger
@@ -17,7 +18,8 @@ from nicewebrl import get_logger
 
 logger = get_logger(__name__)
 
-MAX_STAGE_EPISODES = 10
+MAX_STAGE_EPISODES = 1
+MAX_EPISODE_TIMESTEPS = 10
 MIN_SUCCESS_EPISODES = 1
 VERBOSITY = 1
 
@@ -72,7 +74,7 @@ jax_web_env.precompile(dummy_env_params=dummy_env_params)
 # Define rendering function
 def render_fn(timestep: TimeStep):
     image = render_craftax_pixels(
-        timestep.state, block_pixel_size=BLOCK_PIXEL_SIZE_IMG)
+        timestep.state, block_pixel_size=BLOCK_PIXEL_SIZE_HUMAN)
     return image.astype(jnp.uint8)
 
 # jit it so fast
@@ -93,15 +95,14 @@ all_stages = []
 # ------------------
 async def instruction_display_fn(stage, container):
     with container.style('align-items: center;'):
-        container.clear()
+        nicewebrl.clear_element(container)
         ui.markdown(f"## {stage.name}")
-        ui.markdown(stage.body, extras=['cuddled-lists'])
+        ui.markdown("These are instructions")
 
 instruction_stage = Stage(
     name="Instuctions",
-    body="These are instructions",
     display_fn=instruction_display_fn)
-#all_stages.append(instruction_stage)
+all_stages.append(instruction_stage)
 
 
 # ------------------
@@ -109,16 +110,16 @@ instruction_stage = Stage(
 # ------------------
 # EXAMPLE: change parameters for this specific stage
 env_params = jax_env.default_params.replace(
-    max_timesteps=10,
+    max_timesteps=MAX_EPISODE_TIMESTEPS,
 )
 
 def make_image_html(src):
-    html = f'''
-    <div id="stateImageContainer" style="display: flex; justify-content: center; align-items: center; height: 200%;">
-        <img id="stateImage" src="{src}" style="width: 200%; height: 200%; object-fit: contain;">
-    </div>
-    '''
-    return html
+  html = f'''
+  <div id="stateImageContainer" style="display: flex; justify-content: center; align-items: center;">
+      <img id="stateImage" src="{src}" style="width: 50%; height: 50%; object-fit: contain;">
+  </div>
+  '''
+  return html
 
 
 async def env_stage_display_fn(
@@ -130,7 +131,7 @@ async def env_stage_display_fn(
   stage_state: EnvStageState = stage.get_user_data('stage_state')
 
   with container.style('align-items: center;'):
-    container.clear()
+    nicewebrl.clear_element(container)
     # --------------------------------
     # tell person how many episodes completed and how many successful
     # --------------------------------
@@ -147,6 +148,11 @@ async def env_stage_display_fn(
     # --------------------------------
     ui.html(make_image_html(src=state_image))
 
+def evaluate_success_fn(timestep: TimeStep):
+    """Episode finishes if person every gets 1 achievement"""
+    achievements = timestep.state.achievements.astype(jnp.float32)
+    success = achievements.sum() >= 1
+    return success
 
 environment_stage = EnvStage(
     name="Environment",
@@ -157,10 +163,9 @@ environment_stage = EnvStage(
     render_fn=render_fn,
     vmap_render_fn=vmap_render_fn,
     display_fn=env_stage_display_fn,
-    evaluate_success_fn=lambda t: jax_env.is_terminal(t.state, env_params),
-    check_finished=lambda t: jax_env.is_terminal(t.state, env_params),
-    max_episodes=MAX_STAGE_EPISODES,
+    evaluate_success_fn=evaluate_success_fn,
     min_success=MIN_SUCCESS_EPISODES,
+    max_episodes=MAX_STAGE_EPISODES,
     verbosity=VERBOSITY,
     # add custom metadata to be stored here
     metadata=dict(

@@ -62,20 +62,6 @@ async def global_handle_key_press(e, container):
     if local_handle_key_press is not None:
       await local_handle_key_press()
 
-
-async def create_button_and_wait(
-      stage: stages.Stage,
-      container: ui.element,
-      handle_button_press_fn: Callable[[], Awaitable[None]]):
-    """This function will create a button and wait for a button or key press before proceeding"""
-    with container:
-      container.clear()
-      button = ui.button('Next page').bind_visibility_from(
-          stage, 'next_button')
-      await wait_for_button_or_keypress(button)
-      logger.info("Button or key pressed")
-      await handle_button_press_fn()
-
 #####################################
 # Setup logger
 #####################################
@@ -109,7 +95,7 @@ app.on_shutdown(close_db)
 ########################
 # Run experiment
 ########################
-async def start_experiment(meta_container, stage_container, button_container):
+async def start_experiment(container):
 
   # --------------------------------
   # initialize
@@ -120,7 +106,7 @@ async def start_experiment(meta_container, stage_container, button_container):
     app.storage.user['experiment_started'] = True
 
   # register global key press handler
-  ui.on('key_pressed', lambda e: global_handle_key_press(e, stage_container))
+  ui.on('key_pressed', lambda e: global_handle_key_press(e, container))
 
   logger.info("Starting experiment")
   while True and await experiment_not_finished():
@@ -129,16 +115,16 @@ async def start_experiment(meta_container, stage_container, button_container):
       stage = environment.all_stages[stage_idx]
 
       logger.info("="*30)
-      logger.info(f"Began {stage.name}")
+      logger.info(f"Began stage '{stage.name}'")
       # activate stage
-      await run_stage(stage, stage_container, button_container)
-      logger.info(f"Finished {stage.name}")
+      await run_stage(stage, container)
+      logger.info(f"Finished stage '{stage.name}'")
 
       # wait for any saves to finish before updating stage
       # very important, otherwise may lose data
       if isinstance(stage, stages.EnvStage):
         await stage.finish_saving_user_data()
-        logger.info(f"Saved data for {stage.name}")
+        logger.info(f"Saved data for stage '{stage.name}'")
 
       # update stage index
       async with get_user_lock():
@@ -148,10 +134,15 @@ async def start_experiment(meta_container, stage_container, button_container):
       if app.storage.user['stage_idx'] >= len(environment.all_stages):
           break
 
-  #await finish_experiment(meta_container, stage_container, button_container)
+  await finish_experiment(container)
 
+async def finish_experiment(container):
+    # NOTE: you can do things like saving data here
+    nicewebrl.clear_element(container)
+    with container:
+      ui.markdown("# Experiment over")
 
-async def run_stage(stage, stage_container, button_container):
+async def run_stage(stage, container):
   """Runs and Environment Stage
   
 
@@ -174,6 +165,7 @@ async def run_stage(stage, stage_container, button_container):
           logger.info(f"Finished {stage.name} via key press")
           # Signal that the stage is over
           stage_over_event.set()
+  await stage.set_user_data(local_handle_key_press=local_handle_key_press)
 
   async def handle_button_press():
     # check if stage is already finished, if so, return
@@ -181,7 +173,7 @@ async def run_stage(stage, stage_container, button_container):
        return
 
     # handle button press
-    await stage.handle_button_press(stage_container)
+    await stage.handle_button_press(container)
 
     # check if stage is finished, if so, signal that the stage is over
     async with get_user_lock():
@@ -193,35 +185,29 @@ async def run_stage(stage, stage_container, button_container):
   #############################################
   # Activate new stage
   #############################################
-  with stage_container.style('align-items: center;'):
-    await stage.activate(stage_container)
+  with container.style('align-items: center;'):
+    await stage.activate(container)
 
   if stage.get_user_data('finished', False):
     # over as soon as stage activation was complete
     logger.info(f"Finished {stage.name} immediately after activation")
     stage_over_event.set()
 
-  await stage.set_user_data(local_handle_key_press=local_handle_key_press)
-
-  with button_container.style('align-items: center;'):
-      button_container.clear()
-
-      ####################
-      # Button to go to next page
-      ####################
-      next_button_container = ui.row()
-      if stage.next_button:
-        await create_button_and_wait(stage, next_button_container, handle_button_press)
+  if stage.next_button:
+    with container:
+      button = ui.button('Next page')
+      await wait_for_button_or_keypress(button)
+      await handle_button_press()
 
   await stage_over_event.wait()
-  button_container.clear()
+  ui.notify("Loading next page...", type='info', position='center')
 
 
 #####################################
 # Root page
 #####################################
 
-async def check_if_over(*args, episode_limit=60, ** kwargs):
+async def check_if_over(container, episode_limit=60):
    minutes_passed = nicewebrl.get_user_session_minutes()
    minutes_passed = app.storage.user['session_duration']
    if minutes_passed > episode_limit:
@@ -266,21 +252,11 @@ async def index(request: Request):
     )
     with card:
       episode_limit = 200
-      ui.timer(
-          1,  # check every minute
-          lambda: check_if_over(
-              episode_limit=episode_limit,
-              meta_container=meta_container,
-              stage_container=stage_container,
-              button_container=button_container))
-      meta_container = ui.column()
-      with meta_container.style('align-items: center;'):
-        stage_container = ui.column()
-        button_container = ui.column()
-
-      with meta_container.style('align-items: center;'):
-        await start_experiment(
-            meta_container, stage_container, button_container)
+      with ui.column().style('align-items: center;') as container:
+        # check every minute if over
+        ui.timer(interval=1,
+                 callback=lambda: check_if_over(episode_limit=episode_limit, container=container))
+        await start_experiment(container)
 
 ui.run(
     storage_secret='private key to secure the browser session cookie',

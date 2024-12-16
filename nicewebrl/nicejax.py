@@ -310,20 +310,15 @@ class JaxWebEnv:
 
         if actions is None:
             actions = try_to_get_actions(env)
-        num_actions = actions.shape[0]
 
-        #@partial(jax.jit, static_argnums=(1,))
         def reset(rng, params):
             return env.reset(rng, params)
 
-        #@partial(jax.jit, static_argnums=(2,))
         def next_steps(rng, timestep, env_params):
-            rngs = jax.random.split(rng, num_actions)
-
             # vmap over rngs and actions. re-use timestep
             timesteps = jax.vmap(
-                env.step, in_axes=(0, None, 0, None), out_axes=0
-            )(rngs, timestep, actions, env_params)
+                env.step, in_axes=(None, None, 0, None), out_axes=0
+            )(rng, timestep, actions, env_params)
             return timesteps
 
         self.reset = jax.jit(reset)
