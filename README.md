@@ -3,7 +3,7 @@ Python library for quickly making interactive RL Apps with [NiceGUI](https://nic
 
 ### Install
 
-```
+```bash
 # pip install
 pip install git+https://github.com/wcarvalho/nicewebrl
 
@@ -13,6 +13,10 @@ conda activate nicewebrl
 pip install -e .
 ```
 
+**If you want to also run examples**
+```bash
+pip install -e ".[examples]"  
+```
 
 ### Jax environments
 
