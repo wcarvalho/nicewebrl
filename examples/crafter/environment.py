@@ -21,18 +21,10 @@ MAX_STAGE_EPISODES = 10
 MIN_SUCCESS_EPISODES = 1
 VERBOSITY = 1
 
-########################################
-# Turn on caching of jax compiled functions
-# NOTE: useful for debugging so don't have to recompile environment every time
-########################################
-jax.config.update("jax_cache_dir", "data/jax_cache")
-jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
-jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
 
 ########################################
 # Define objects to help with automatic serialization/deserialization
 ########################################
-
 
 class TimeStep(struct.PyTreeNode):
     state: craftax_state.EnvState  # override state to one used by craftax
@@ -167,7 +159,6 @@ environment_stage = EnvStage(
     display_fn=env_stage_display_fn,
     evaluate_success_fn=lambda t: jax_env.is_terminal(t.state, env_params),
     check_finished=lambda t: jax_env.is_terminal(t.state, env_params),
-    state_cls=EnvStageState,
     max_episodes=MAX_STAGE_EPISODES,
     min_success=MIN_SUCCESS_EPISODES,
     verbosity=VERBOSITY,

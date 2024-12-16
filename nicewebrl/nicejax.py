@@ -161,9 +161,23 @@ def deserialize_bytes(
         cls: struct.PyTreeNode,
         encoded_data: bytes,
 ):
-    data_bytes = b64decode(encoded_data)
+    """deserialize bytes.
+
+    NOTE: this is suboptimal compared to just doing
+    >> # serialize bytes
+    >> encoded_data = serialization.to_bytes(data)
+    >> # deserialize bytes
+    >> reconstructed = serialization.from_bytes(example, encoded_data)
+
+    Args:
+        cls (struct.PyTreeNode): _description_
+        encoded_data (bytes): _description_
+
+    Returns:
+        _type_: _description_
+    """
     deserialized_tree = serialization.from_bytes(
-        None, data_bytes)
+        None, encoded_data)
     deserialized = deserialize(cls, deserialized_tree)
     return deserialized
 

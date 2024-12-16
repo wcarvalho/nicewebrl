@@ -16,7 +16,6 @@ from nicewebrl.nicejax import new_rng
 from nicewebrl.nicejax import match_types
 from nicewebrl.nicejax import make_serializable
 from nicewebrl.nicejax import deserialize
-from nicewebrl.nicejax import deserialize_bytes
 from nicewebrl.nicejax import base64_npimage
 from nicewebrl.nicejax import StepType
 from nicewebrl.nicejax import TimeStep

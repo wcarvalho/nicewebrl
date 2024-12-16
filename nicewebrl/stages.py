@@ -11,6 +11,7 @@ from flax import struct
 from flax import serialization
 import jax
 import jax.numpy as jnp
+from jax.tree_util import tree_flatten, tree_unflatten, tree_structure
 import json
 import random
 
@@ -21,6 +22,7 @@ from nicewebrl.logging import get_logger
 from tortoise import fields, models
 from nicewebrl.utils import retry_with_exponential_backoff
 from asyncio import Lock
+import msgpack
 
 FeedbackFn = Callable[[struct.PyTreeNode], Dict]
 
@@ -43,7 +45,7 @@ class StageStateModel(models.Model):
     session_id = fields.CharField(
         max_length=255, index=True)  # Added max_length
     stage_idx = fields.IntField(index=True)
-    data = fields.TextField()
+    data = fields.BinaryField()
 
     class Meta:
         table = "stage"
@@ -61,15 +63,16 @@ class ExperimentData(models.Model):
     class Meta:
         table = "experiment"
 
-async def get_latest_stage_state(cls: struct.PyTreeNode) -> StageStateModel | None:
+async def get_latest_stage_state(example: struct.PyTreeNode) -> StageStateModel | None:
+    logger.info("Getting latest stage state")
     latest = await StageStateModel.filter(
         session_id=app.storage.browser['id'],
         stage_idx=app.storage.user['stage_idx'],
     ).order_by('-id').first()
 
     if latest is not None:
-        deserialized = nicejax.deserialize_bytes(cls, latest.data)
-        return deserialized
+      latest = serialization.from_bytes(example, latest.data)
+
     return latest
 
 async def safe_save(
@@ -99,7 +102,7 @@ async def safe_save(
                 if attempt == max_retries - 1:
                     logger.error(f"Database conflict while saving {model.__class__.__name__} after {max_retries} attempts: {e}")
                     raise
-                
+
                 # Add some random jitter to help prevent repeated collisions
                 jitter = random.uniform(0, 0.1)  # 0-100ms random jitter
                 delay = min(base_delay * (2 ** attempt) + jitter, max_delay)
@@ -119,14 +122,12 @@ async def save_stage_state(
     max_retries: int = 5, 
     base_delay: float = 0.3,
     max_delay: float = 5.0
-):
-    stage_state = jax.tree_map(make_serializable, stage_state)
-    serialized_data = serialization.to_bytes(stage_state)
-    encoded_data = base64.b64encode(serialized_data).decode('ascii')
+): 
+
     model = StageStateModel(
         session_id=app.storage.browser['id'],
         stage_idx=app.storage.user['stage_idx'],
-        data=encoded_data,
+        data=serialization.to_bytes(stage_state),
     )
     await safe_save(
         model,
@@ -135,13 +136,13 @@ async def save_stage_state(
         max_delay=max_delay,
         synchronous=True
     )
+    logger.info(f"Saved stage state to database")
 
-@struct.dataclass
-class EnvStageState:
-    timestep: struct.PyTreeNode = None
-    nsteps: int = 0
-    nepisodes: int = 0
-    nsuccesses: int = 0
+class EnvStageState(struct.PyTreeNode):
+    timestep: struct.PyTreeNode
+    nsteps: jax.Array = jnp.array(1, dtype=jnp.int32)
+    nepisodes: jax.Array = jnp.array(1, dtype=jnp.int32)
+    nsuccesses: jax.Array = jnp.array(0, dtype=jnp.int32)
 
 @dataclasses.dataclass
 class Stage:
@@ -297,6 +298,9 @@ class EnvStage(Stage):
         if self.check_finished is None:
             self.check_finished = lambda timestep: False
 
+        if self.state_cls is None:
+            self.state_cls = EnvStageState
+
         self._user_queues = {}  # new: dictionary to store per-user queues
 
     def get_user_queue(self):
@@ -390,45 +394,86 @@ class EnvStage(Stage):
 
         ui.run_javascript("window.accept_keys = true;")
 
-    async def start_stage(self, container: ui.element):
+    async def reset_stage(self) -> EnvStageState:
         rng = new_rng()
 
         # NEW EPISODE
         timestep = self.web_env.reset(rng, self.env_params)
-        stage_state = self.state_cls(timestep=timestep).replace(
+        return self.state_cls(timestep=timestep).replace(
             nepisodes=1,
             nsteps=1,
         )
-        await self.set_user_data(stage_state=stage_state)
-        asyncio.create_task(save_stage_state(stage_state))
 
-        # DISPLAY NEW EPISODE
-        await self.wait_for_start(container, timestep)
-        await self.step_and_send_timestep(container, timestep)
+    #async def start_stage(
+    #        self,
+    #        container: ui.element,
+    #        stage_state: Optional[EnvStageState] = None):
+    #    #rng = new_rng()
 
-    async def load_stage(self, container: ui.element, stage_state: EnvStageState):
-        rng = new_rng()
-        timestep = nicejax.match_types(
-            example=self.web_env.reset(rng, self.env_params),
-            data=stage_state.timestep)
-        await self.set_user_data(stage_state=stage_state.replace(
-            timestep=timestep),
-        )
+    #    # NEW EPISODE
+    #    if stage_state is None:
+    #      stage_state = await self.reset_stage()
+    #    await self.set_user_data(stage_state=stage_state)
+    #    asyncio.create_task(save_stage_state(stage_state))
 
-        await self.step_and_send_timestep(container, timestep)
+    #    # DISPLAY NEW EPISODE
+    #    await self.wait_for_start(container, stage_state.timestep)
+    #    await self.step_and_send_timestep(
+    #        container, stage_state.timestep)
+
+    #async def load_stage(
+    #        self,
+    #        container: ui.element,
+    #        stage_state: EnvStageState,
+    #        ):
+    #    #rng = new_rng()
+    #    #timestep = nicejax.match_types(
+    #    #    example=self.web_env.reset(rng, self.env_params),
+    #    #    data=stage_state.timestep)
+    #    #await self.set_user_data(stage_state=stage_state.replace(
+    #    #    timestep=timestep),
+    #    #)
+    #    await self.set_user_data(stage_state=stage_state)
+    #    await self.step_and_send_timestep(container, stage_state.timestep)
 
     async def activate(self, container: ui.element):
+        """
+        
+        First reset stage and get a new stage state.
+        Then try to load stage state from memory using the stage state to get the right types.
+        If no stage state is found, continue with the new stage state.
+        """
+
         async with self.get_user_lock():
             if self.verbosity: logger.info("="*30)
             if self.verbosity: logger.info(self.metadata)
-            # (potentially) load stage state from memory
-            stage_state = await get_latest_stage_state(
-                cls=self.state_cls)
 
-            if stage_state is None:
-                await self.start_stage(container)
+            # reset stage
+            rng = new_rng()
+            timestep = self.web_env.reset(rng, self.env_params)
+            new_stage_state = self.state_cls(timestep=timestep)
+
+            # (potentially) load stage state from memory
+            loaded_stage_state = await get_latest_stage_state(
+                example=new_stage_state)
+
+            if loaded_stage_state is None:
+                logger.info("No stage state found, starting new stage")
+                #await self.start_stage(container, new_stage_state)
+                await self.set_user_data(stage_state=new_stage_state)
+                asyncio.create_task(save_stage_state(new_stage_state))
+
+                # DISPLAY NEW EPISODE
+                await self.wait_for_start(container, new_stage_state.timestep)
+                await self.step_and_send_timestep(
+                    container, new_stage_state.timestep)
+
             else:
-                await self.load_stage(container, stage_state)
+                logger.info("Loading stage state from memory")
+                #await self.load_stage(container, loaded_stage_state)
+                await self.set_user_data(stage_state=loaded_stage_state)
+                await self.step_and_send_timestep(container, loaded_stage_state.timestep)
+
             await self.set_user_data(started=True)
             ui.run_javascript("window.accept_keys = true;")
 
@@ -452,10 +497,8 @@ class EnvStage(Stage):
         if self.custom_data_fn is not None:
             timestep_data = self.custom_data_fn(timestep)
             timestep_data = jax.tree_map(make_serializable, timestep_data)
-        timestep = jax.tree_map(make_serializable, timestep)
+
         serialized_timestep = serialization.to_bytes(timestep)
-        encoded_timestep = base64.b64encode(
-            serialized_timestep).decode('ascii')
 
         step_metadata = copy.deepcopy(self.metadata)
         step_metadata.update(type='EnvStage', **user_stats)
@@ -476,7 +519,7 @@ class EnvStage(Stage):
                 action_name=action_name,
                 action_idx=action_idx,
                 timelimit=self.duration,
-                timestep=encoded_timestep,
+                timestep=serialized_timestep,
                 **timestep_data,
             ),
             user_data=user_data,
@@ -509,7 +552,7 @@ class EnvStage(Stage):
                 await self.set_user_data(
                     finished=True,
                     final_save=True)
-                #import os; os._exit(1)
+
         await self.set_user_data(saved_data=True)
 
     @retry_with_exponential_backoff(max_retries=5, base_delay=1, max_delay=10)

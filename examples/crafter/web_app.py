@@ -132,11 +132,13 @@ async def start_experiment(meta_container, stage_container, button_container):
       logger.info(f"Began {stage.name}")
       # activate stage
       await run_stage(stage, stage_container, button_container)
+      logger.info(f"Finished {stage.name}")
 
       # wait for any saves to finish before updating stage
       # very important, otherwise may lose data
       if isinstance(stage, stages.EnvStage):
         await stage.finish_saving_user_data()
+        logger.info(f"Saved data for {stage.name}")
 
       # update stage index
       async with get_user_lock():
