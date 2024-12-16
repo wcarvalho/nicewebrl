@@ -492,11 +492,12 @@ class EnvStage(Stage):
             await f.write(json.dumps(save_data) + '\n')
             name = self.metadata.get('maze', self.name)
             if imageSeenTime is not None and keydownTime is not None:
+                stage_state = self.get_user_data('stage_state')
                 if self.verbosity: 
                     logger.info(f'{name} saved file')
                     logger.info(f'∆t: {time_diff(imageSeenTime, keydownTime)/1000.}')
                     logger.info(f'stage state: {self.user_stats()}')
-                    logger.info(f'env step: {timestep.state.step_num}')
+                    logger.info(f'env step: {stage_state.nsteps}')
 
             else:
                 logger.error(f'{name} saved file')

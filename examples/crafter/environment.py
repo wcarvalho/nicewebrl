@@ -14,10 +14,21 @@ from nicewebrl import JaxWebEnv, base64_npimage, TimestepWrapper
 from nicewebrl import Stage, EnvStage, EnvStageState
 from nicewebrl import get_logger
 
+
 logger = get_logger(__name__)
 
 MAX_STAGE_EPISODES = 10
 MIN_SUCCESS_EPISODES = 1
+VERBOSITY = 1
+
+########################################
+# Turn on caching of jax compiled functions
+# NOTE: useful for debugging so don't have to recompile environment every time
+########################################
+jax.config.update("jax_cache_dir", "data/jax_cache")
+jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
+jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
+
 ########################################
 # Define objects to help with automatic serialization/deserialization
 ########################################
@@ -44,7 +55,7 @@ class EnvStageState:
 ########################################
 actions = [Action.RIGHT, Action.DOWN, Action.LEFT, Action.UP, Action.DO]
 action_array = jnp.array([a.value for a in actions])
-action_keys = ["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp", "Space"]
+action_keys = ["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp", " "]
 action_to_name = [a.name for a in actions]
 
 ########################################
@@ -106,13 +117,13 @@ instruction_stage = Stage(
 # ------------------
 # EXAMPLE: change parameters for this specific stage
 env_params = jax_env.default_params.replace(
-    #day_length=100,
+    max_timesteps=10,
 )
 
 def make_image_html(src):
     html = f'''
-    <div id="stateImageContainer" style="display: flex; justify-content: center; align-items: center; height: 100%;">
-        <img id="stateImage" src="{src}" style="max-width: 900px; max-height: 900px; object-fit: contain;">
+    <div id="stateImageContainer" style="display: flex; justify-content: center; align-items: center; height: 200%;">
+        <img id="stateImage" src="{src}" style="width: 200%; height: 200%; object-fit: contain;">
     </div>
     '''
     return html
@@ -159,6 +170,7 @@ environment_stage = EnvStage(
     state_cls=EnvStageState,
     max_episodes=MAX_STAGE_EPISODES,
     min_success=MIN_SUCCESS_EPISODES,
+    verbosity=VERBOSITY,
     # add custom metadata to be stored here
     metadata=dict(
         # nothing required, just for bookkeeping
