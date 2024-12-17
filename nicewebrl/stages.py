@@ -232,9 +232,11 @@ class FeedbackStage(Stage):
             metadata=metadata,
         )
         save_file = self.user_save_file_fn()
-        async with aiofiles.open(save_file, 'a') as f:
-            # Write the dictionary as a JSON string and add a newline
-            await f.write(json.dumps(save_data) + '\n')
+        async with aiofiles.open(save_file, 'ab') as f:  # Changed to binary mode
+            # Use msgpack to serialize the data
+            packed_data = msgpack.packb(save_data)
+            await f.write(packed_data)
+            await f.write(b'\n')  # Add newline in binary mode
         await self.finish_stage()
 
 
