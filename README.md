@@ -1,7 +1,7 @@
 # nicewebrl
 Python library for quickly making interactive RL Apps with [NiceGUI](https://nicegui.io/). It is particularly suited for hooking up [JAX](https://github.com/google/jax) based RL environments to web interfaces. JAX is useful for blazing fast iteration on AI algorithms. With this library, you can use the exact same environment for human subject experiments.
 
-### Install
+# Install
 
 ```bash
 # pip install
@@ -14,7 +14,7 @@ pip install -e .
 ```
 
 
-### Getting Started
+# Getting Started
 
 We've provided an example of making a web app to have humans control a craftax agent in `examples/craftax`.
 
@@ -32,7 +32,7 @@ python web_app.py
 
 **COMING SOON**: Instructons for putting this on a remote server.
 
-### Jax environments
+# Jax environments
 
 The following are all Jax environments which can be used with this framework to run human subject experiments. The power of using jax is that one can use the **exact** same environment for human subjects experiments as for developing modern machine learning algorithms (especially reinforcement learning algorithms).
 
