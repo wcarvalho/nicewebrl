@@ -19,7 +19,7 @@ from tortoise import fields, models
 
 from nicegui import app, ui
 from nicewebrl import nicejax, clear_element
-from nicewebrl.nicejax import new_rng, base64_npimage, make_serializable
+from nicewebrl.nicejax import new_rng, base64_npimage, make_serializable, TimeStep
 from nicewebrl.logging import get_logger
 from nicewebrl.utils import retry_with_exponential_backoff
 from nicewebrl.utils import wait_for_button_or_keypress
@@ -31,13 +31,12 @@ FeedbackFn = Callable[[struct.PyTreeNode], Dict]
 
 logger = get_logger(__name__)
 
-Timestep = struct.PyTreeNode
 Image = jnp.ndarray
 
-TimestepCallFn = Callable[[Timestep], None]
-RenderFn = Callable[[Timestep], Image]
+TimestepCallFn = Callable[[TimeStep], None]
+RenderFn = Callable[[TimeStep], Image]
 
-DisplayFn = Callable[["Stage", ui.element, Timestep], None]
+DisplayFn = Callable[["Stage", ui.element, TimeStep], None]
 
 def time_diff(t1, t2) -> float:
     # Convert string timestamps to datetime objects
@@ -409,42 +408,7 @@ class EnvStage(Stage):
 
         # NEW EPISODE
         timestep = self.web_env.reset(rng, self.env_params)
-        return self.state_cls(timestep=timestep).replace(
-            nepisodes=1,
-            nsteps=1,
-        )
-
-    #async def start_stage(
-    #        self,
-    #        container: ui.element,
-    #        stage_state: Optional[EnvStageState] = None):
-    #    #rng = new_rng()
-
-    #    # NEW EPISODE
-    #    if stage_state is None:
-    #      stage_state = await self.reset_stage()
-    #    await self.set_user_data(stage_state=stage_state)
-    #    asyncio.create_task(save_stage_state(stage_state))
-
-    #    # DISPLAY NEW EPISODE
-    #    await self.wait_for_start(container, stage_state.timestep)
-    #    await self.step_and_send_timestep(
-    #        container, stage_state.timestep)
-
-    #async def load_stage(
-    #        self,
-    #        container: ui.element,
-    #        stage_state: EnvStageState,
-    #        ):
-    #    #rng = new_rng()
-    #    #timestep = nicejax.match_types(
-    #    #    example=self.web_env.reset(rng, self.env_params),
-    #    #    data=stage_state.timestep)
-    #    #await self.set_user_data(stage_state=stage_state.replace(
-    #    #    timestep=timestep),
-    #    #)
-    #    await self.set_user_data(stage_state=stage_state)
-    #    await self.step_and_send_timestep(container, stage_state.timestep)
+        return self.state_cls(timestep=timestep)
 
     async def activate(self, container: ui.element):
         """

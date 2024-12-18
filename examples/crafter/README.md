@@ -1,2 +1,0 @@
-Things that could be improved:
-1. I've only set-up saving data to google cloud storage. This is easy to use but very cumbersome and confusing to set up. Is there a better default choice to suggest for future users?
