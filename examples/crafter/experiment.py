@@ -19,7 +19,7 @@ from nicewebrl import get_logger
 logger = get_logger(__name__)
 
 MAX_STAGE_EPISODES = 1
-MAX_EPISODE_TIMESTEPS = 10
+MAX_EPISODE_TIMESTEPS = 10000
 MIN_SUCCESS_EPISODES = 1
 VERBOSITY = 1
 
@@ -77,7 +77,11 @@ async def instruction_display_fn(stage, container):
     with container.style('align-items: center;'):
         nicewebrl.clear_element(container)
         ui.markdown(f"## {stage.name}")
-        ui.markdown("These are instructions")
+        ui.markdown(
+           """
+          - Press the arrow keys to move the agent
+          - Press the space bar to interact with objects
+          """)
 
 instruction_stage = Stage(
     name="Instuctions",

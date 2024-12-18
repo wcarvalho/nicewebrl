@@ -13,6 +13,25 @@ conda activate nicewebrl
 pip install -e .
 ```
 
+
+### Getting Started
+
+We've provided an example of making a web app to have humans control a craftax agent in `examples/craftax`.
+
+**(1) Install nicewebrl with examples**
+```bash
+pip install -e ".[examples]"  
+```
+
+**(2) run the web app from the directory**
+```bash
+cd examples/crafter
+python web_app.py
+```
+**NOTE**: this will make a `data` and `.nicegui` folder which you can delete to remove user data.
+
+**COMING SOON**: Instructons for putting this on a remote server.
+
 ### Jax environments
 
 The following are all Jax environments which can be used with this framework to run human subject experiments. The power of using jax is that one can use the **exact** same environment for human subjects experiments as for developing modern machine learning algorithms (especially reinforcement learning algorithms).
