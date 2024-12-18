@@ -13,16 +13,6 @@ conda activate nicewebrl
 pip install -e .
 ```
 
-**If you want to also run examples**
-```bash
-pip install "git+https://github.com/wcarvalho/nicewebrl#egg=nicewebrl[examples]"
-
-# more manually (first clone then)
-conda create -n nicewebrl python=3.10 pip wheel -y
-conda activate nicewebrl
-pip install -e ".[examples]"  
-```
-
 ### Jax environments
 
 The following are all Jax environments which can be used with this framework to run human subject experiments. The power of using jax is that one can use the **exact** same environment for human subjects experiments as for developing modern machine learning algorithms (especially reinforcement learning algorithms).
