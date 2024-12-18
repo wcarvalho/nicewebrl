@@ -78,8 +78,7 @@ if not os.path.exists(DATA_DIR):
 async def init_db() -> None:
     await Tortoise.init(
         db_url=f'sqlite://{DATA_DIR}/{DATABASE_FILE}',
-        # this will look in models.py,
-        # models.py uses defaults from nicewebrl
+        # this will use nicewebrl.stages.StageStateModel
         modules={'models': ['nicewebrl.stages']})
     await Tortoise.generate_schemas()
 
