@@ -30,7 +30,7 @@ python web_app.py
 ```
 **NOTE**: this will make a `data` and `.nicegui` folder which you can delete to remove user data.
 
-**COMING SOON**: Instructons for putting this on a remote server.
+**COMING SOON**: Instructions for putting this on a remote server.
 
 # Jax environments
 
