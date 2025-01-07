@@ -10,6 +10,7 @@ from typing import get_type_hints
 from base64 import b64encode, b64decode
 from flax import struct
 from flax import serialization
+from flax.core import FrozenDict
 import io
 import inspect
 import jax.numpy as jnp
@@ -225,9 +226,13 @@ class TimestepWrapper(object):
             self,
             env,
             autoreset: bool = True,
+            use_params: bool = True,
+            num_leading_dims: int = 1,
     ):
         self._env = env
         self._autoreset = autoreset
+        self._use_params = use_params
+        self._num_leading_dims = num_leading_dims
 
     # provide proxy access to regular attributes of wrapped object
     def __getattr__(self, name):
@@ -238,10 +243,13 @@ class TimestepWrapper(object):
         key: jax.random.PRNGKey,
         params: Optional[struct.PyTreeNode] = None
     ) -> Tuple[TimeStep, dict]:
-        obs, state = self._env.reset(key, params)
+        if self._use_params:
+            obs, state = self._env.reset(key, params)
+        else:
+            obs, state = self._env.reset(key)
         # Get shape from first leaf of obs, assuming it's a batch dimension
         first_leaf = jax.tree_util.tree_leaves(obs)[0]
-        shape = first_leaf.shape[0:1] if first_leaf.ndim > 1 else ()
+        shape = first_leaf.shape[self._num_leading_dims:]
         timestep = TimeStep(
             state=state,
             observation=obs,
@@ -261,9 +269,14 @@ class TimestepWrapper(object):
     ) -> Tuple[TimeStep, dict]:
 
         def env_step(prior_timestep_):
-          obs, state, reward, done, info = self._env.step(
-              key, prior_timestep_.state, action, params
-          )
+          if self._use_params:
+            obs, state, reward, done, info = self._env.step(
+                key, prior_timestep_.state, action, params
+            )
+          else:
+            obs, state, reward, done, info = self._env.step(
+                key, prior_timestep_.state, action
+            )
           del info
           return TimeStep(
               state=state,
@@ -324,7 +337,7 @@ class JaxWebEnv:
         self.reset = jax.jit(reset)
         self.next_steps = jax.jit(next_steps)
 
-    def precompile(self, dummy_env_params: struct.PyTreeNode) -> None:
+    def precompile(self, dummy_env_params: Optional[struct.PyTreeNode] = None) -> None:
         """Call this function to pre-compile jax functions before experiment starts."""
         print("Compiling jax environment functions.")
         start = time.time()
@@ -351,4 +364,3 @@ class JaxWebEnv:
             next_timesteps).compile()
         print(f"\ttime: {time.time()-start}")
         return vmap_render_fn
-

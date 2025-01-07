@@ -128,6 +128,13 @@ def basic_javascript_file():
   return file
 
 
+def multihuman_javascript_file():
+  current_file_path = os.path.abspath(__file__)
+  current_directory = os.path.dirname(current_file_path)
+  file = f"{current_directory}/multihuman_basics.js"
+  return file
+
+
 def initialize_user(seed: int = 0, *kwargs):
     """
     Initialize user-specific data and settings.
@@ -160,3 +167,12 @@ def get_user_session_minutes():
     minutes_passed = duration.total_seconds() / 60
     app.storage.user['session_duration'] = minutes_passed
     return minutes_passed
+
+@ui.refreshable
+def broadcast_message(event: str, message: str):
+  called_by_user_id = str(app.storage.user['seed'])
+  called_by_room_id = str(app.storage.user['room_id'])
+  stage = app.storage.user['stage_idx']
+  fn = f"userMessage('{called_by_room_id}', '{called_by_user_id}', '{event}', '{stage}', '{message}')"
+  logger.info(fn)
+  ui.run_javascript(fn)

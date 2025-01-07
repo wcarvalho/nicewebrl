@@ -20,8 +20,8 @@ dependencies = [
     "nicegui",
     "tortoise-orm",
     "Pillow",
-    "jax>=0.4.16,<=0.4.20",
-    "jaxlib>=0.4.16,<=0.4.20",
+    "jax>=0.4.16",
+    "jaxlib>=0.4.16",
     "distrax>=0.1.5",
     "flax>=0.8.2",
     "numpy>=1.26.4,<2",
@@ -29,9 +29,15 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-examples = [
+craftax = [
     "craftax",
     "python-dotenv",
+    "jax>=0.4.16,<=0.4.20",  # needed for backward compatibility
+]
+jaxmarl = [
+    "jaxmarl @ git+https://github.com/FLAIROx/JaxMARL.git",
+    "python-dotenv",
+    "jax>=0.4.23",
 ]
 
 [project.urls]

@@ -3,248 +3,21 @@ from typing import List, Any, Callable, Dict, Optional, Union
 import asyncio
 from asyncio import Lock
 import aiofiles
-import base64
 import copy
 import dataclasses
-from datetime import datetime
 
 from flax import struct
 from flax import serialization
 import jax
-import jax.numpy as jnp
-from jax.tree_util import tree_flatten, tree_unflatten, tree_structure
-import json
-import random
-from tortoise import fields, models
 
+import nicewebrl
 from nicegui import app, ui
-from nicewebrl import nicejax, clear_element
 from nicewebrl.nicejax import new_rng, base64_npimage, make_serializable, TimeStep
-from nicewebrl.logging import get_logger
 from nicewebrl.utils import retry_with_exponential_backoff
-from nicewebrl.utils import wait_for_button_or_keypress
 import msgpack
 
-
-FeedbackFn = Callable[[struct.PyTreeNode], Dict]
-
-
-logger = get_logger(__name__)
-
-Image = jnp.ndarray
-
-TimestepCallFn = Callable[[TimeStep], None]
-RenderFn = Callable[[TimeStep], Image]
-
-DisplayFn = Callable[["Stage", ui.element, TimeStep], None]
-
-def time_diff(t1, t2) -> float:
-    # Convert string timestamps to datetime objects
-    t1 = datetime.strptime(t1, '%Y-%m-%dT%H:%M:%S.%fZ')
-    t2 = datetime.strptime(t2, '%Y-%m-%dT%H:%M:%S.%fZ')
-
-    # Calculate the time difference
-    time_difference = t2 - t1
-
-    # Convert the time difference to milliseconds
-    return time_difference.total_seconds() * 1000
-
-class StageStateModel(models.Model):
-    id = fields.IntField(primary_key=True)
-    session_id = fields.CharField(
-        max_length=255, index=True)  # Added max_length
-    stage_idx = fields.IntField(index=True)
-    data = fields.BinaryField()
-
-    class Meta:
-        table = "stage"
-
-class ExperimentData(models.Model):
-    id = fields.IntField(primary_key=True)
-    session_id = fields.CharField(max_length=255, index=True)
-    name = fields.TextField()
-    body = fields.TextField()
-    stage_idx = fields.IntField(index=True)
-    data = fields.JSONField(default=dict)
-    user_data = fields.JSONField(default=dict, blank=True)
-    metadata = fields.JSONField(default=dict, blank=True)
-
-    class Meta:
-        table = "experiment"
-
-async def get_latest_stage_state(example: struct.PyTreeNode) -> StageStateModel | None:
-    logger.info("Getting latest stage state")
-    latest = await StageStateModel.filter(
-        session_id=app.storage.browser['id'],
-        stage_idx=app.storage.user['stage_idx'],
-    ).order_by('-id').first()
-
-    if latest is not None:
-      latest = serialization.from_bytes(example, latest.data)
-
-    return latest
-
-async def safe_save(
-    model: models.Model,
-    max_retries: int = 5,
-    base_delay: float = 0.3,
-    max_delay: float = 5.0,
-    synchronous: bool = True
-):
-    """Helper function to safely save model data with retries.
-    
-    Args:
-        model: Tortoise model instance to save
-        max_retries: Maximum number of retry attempts
-        base_delay: Initial delay between retries in seconds
-        max_delay: Maximum delay between retries in seconds
-        synchronous: If True, await the save; if False, create background task
-    """
-    async def _save():
-        from tortoise.exceptions import IntegrityError, OperationalError
-        
-        for attempt in range(max_retries):
-            try:
-                await model.save()
-                return
-            except (IntegrityError, OperationalError) as e:
-                if attempt == max_retries - 1:
-                    logger.error(f"Database conflict while saving {model.__class__.__name__} after {max_retries} attempts: {e}")
-                    raise
-
-                # Add some random jitter to help prevent repeated collisions
-                jitter = random.uniform(0, 0.1)  # 0-100ms random jitter
-                delay = min(base_delay * (2 ** attempt) + jitter, max_delay)
-                logger.warning(f"Database conflict while saving {model.__class__.__name__} (attempt {attempt + 1}/{max_retries}), retrying in {delay}s: {e}")
-                await asyncio.sleep(delay)
-            except Exception as e:
-                logger.error(f"Unexpected error saving {model.__class__.__name__}: {e}")
-                raise
-
-    if synchronous:
-        await _save()
-    else:
-        asyncio.create_task(_save())
-
-async def save_stage_state(
-    stage_state, 
-    max_retries: int = 5, 
-    base_delay: float = 0.3,
-    max_delay: float = 5.0
-): 
-
-    model = StageStateModel(
-        session_id=app.storage.browser['id'],
-        stage_idx=app.storage.user['stage_idx'],
-        data=serialization.to_bytes(stage_state),
-    )
-    await safe_save(
-        model,
-        max_retries=max_retries,
-        base_delay=base_delay,
-        max_delay=max_delay,
-        synchronous=True
-    )
-
-class EnvStageState(struct.PyTreeNode):
-    timestep: struct.PyTreeNode
-    nsteps: jax.Array = jnp.array(1, dtype=jnp.int32)
-    nepisodes: jax.Array = jnp.array(1, dtype=jnp.int32)
-    nsuccesses: jax.Array = jnp.array(0, dtype=jnp.int32)
-
 @dataclasses.dataclass
-class Stage:
-    name: str = 'stage'
-    body: str = 'text'
-    metadata: Dict[str, Any] = dataclasses.field(default_factory=dict)
-    display_fn: DisplayFn = None
-    custom_key_press_fn: Callable = None
-    finished: bool = False
-    next_button: bool = True
-    duration: int = None
-
-    def __post_init__(self):
-        self.user_data = {}
-        self._lock = Lock()  # Add lock for thread safety
-        self._user_locks = {}  # Dictionary to store per-user locks
-
-
-    def get_user_data(self, key, value=None):
-        user_seed = app.storage.user['seed']
-        self.user_data[user_seed] = self.user_data.get(user_seed, {})
-        return self.user_data[user_seed].get(key, value)
-
-    def pop_user_data(self, key, value=None):
-        user_seed = app.storage.user['seed']
-        self.user_data[user_seed] = self.user_data.get(user_seed, {})
-        return self.user_data[user_seed].pop(key, value)
-
-    async def set_user_data(self, **kwargs):
-        user_seed = app.storage.user['seed']
-        async with self._lock:
-          self.user_data[user_seed] = self.user_data.get(user_seed, {})
-          self.user_data[user_seed].update(kwargs)
-
-    def get_user_lock(self):
-        user_seed = app.storage.user['seed']
-        if user_seed not in self._user_locks:
-            self._user_locks[user_seed] = Lock()
-        return self._user_locks[user_seed]
-
-    async def activate(self, container: ui.element):
-        await self.display_fn(stage=self, container=container)
-
-    async def finish_stage(self):
-        await self.set_user_data(finished=True)
-
-    async def handle_key_press(self, e, container):
-        if self.custom_key_press_fn is not None:
-            await self.custom_key_press_fn(e, container)
-        else:
-            await self.finish_stage()
-
-    async def handle_button_press(self, container):
-        await self.finish_stage()
-
-@dataclasses.dataclass
-class FeedbackStage(Stage):
-    """A simple feedback stage to collect data from a participant.
-    
-    I assume that the display_fn will return once user data is collected and the stage is over. The display_fn should return a dictionary collected data. This is added to the data field of the ExperimentData object.
-    """
-    next_button: bool = False
-    user_save_file_fn: Callable[[], str] = None
-
-    async def activate(self, container: ui.element):
-        results = await self.display_fn(stage=self, container=container)
-        user_data = dict(
-            user_id=app.storage.user['seed'],
-            age=app.storage.user.get('age'),
-            sex=app.storage.user.get('sex'),
-        )
-        metadata = copy.deepcopy(self.metadata)
-        metadata['type'] = 'FeedbackStage'
-
-        save_data = dict(
-            stage_idx=app.storage.user['stage_idx'],
-            name=self.name,
-            body=self.body,
-            session_id=app.storage.browser['id'],
-            data=results,
-            user_data=user_data,
-            metadata=metadata,
-        )
-        save_file = self.user_save_file_fn()
-        async with aiofiles.open(save_file, 'ab') as f:  # Changed to binary mode
-            # Use msgpack to serialize the data
-            packed_data = msgpack.packb(save_data)
-            await f.write(packed_data)
-            await f.write(b'\n')  # Add newline in binary mode
-        await self.finish_stage()
-
-
-@dataclasses.dataclass
-class EnvStage(Stage):
+class MultiHumanEnvStage(nicewebrl.Stage):
     """A stage class for handling interactive environment episodes.
 
     This class manages the interaction between a user and an environment, handling
@@ -303,11 +76,12 @@ class EnvStage(Stage):
         if self.action_to_name is None:
             self.action_to_name = dict()
         else:
-            self.action_to_name = {k: v for k, v in enumerate(self.action_to_name)}
+            self.action_to_name = {k: v for k,
+                                   v in enumerate(self.action_to_name)}
 
         if self.user_save_file_fn is None:
             self.user_save_file_fn = lambda: f'data/user={app.storage.user.get("seed")}.json'
-        
+
         if self.check_finished is None:
             self.check_finished = lambda timestep: False
 
@@ -368,7 +142,7 @@ class EnvStage(Stage):
                 stage=self,
                 container=container,
                 timestep=timestep,
-                )
+            )
 
             attempt = 0
             while True:
@@ -383,7 +157,8 @@ class EnvStage(Stage):
                     return
                 except Exception as e:
                     if attempt % 10 == 0:  # Log every 10 attempts
-                        logger.warning(f"{self.name}: Error getting imageSeenTime (attempt {attempt}): {e}")
+                        logger.warning(
+                            f"{self.name}: Error getting imageSeenTime (attempt {attempt}): {e}")
                     await asyncio.sleep(0.1)  # Short delay between attempts
                     if attempt > 100:
                         ui.notify(f"Please refresh the page", type='negative')
@@ -397,7 +172,7 @@ class EnvStage(Stage):
             self,
             container: ui.element,
             timestep: struct.PyTreeNode,
-            ):
+    ):
         ui.run_javascript("window.accept_keys = false;")
         if self.reset_display_fn is not None:
             await self.reset_display_fn(
@@ -423,8 +198,10 @@ class EnvStage(Stage):
         """
 
         async with self.get_user_lock():
-            if self.verbosity: logger.info("="*30)
-            if self.verbosity: logger.info(self.metadata)
+            if self.verbosity:
+                logger.info("="*30)
+            if self.verbosity:
+                logger.info(self.metadata)
 
             # reset stage
             rng = new_rng()
@@ -437,7 +214,7 @@ class EnvStage(Stage):
 
             if loaded_stage_state is None:
                 logger.info("No stage state found, starting new stage")
-                #await self.start_stage(container, new_stage_state)
+                # await self.start_stage(container, new_stage_state)
                 await self.set_user_data(stage_state=new_stage_state)
                 asyncio.create_task(save_stage_state(new_stage_state))
 
@@ -448,7 +225,7 @@ class EnvStage(Stage):
 
             else:
                 logger.info("Loading stage state from memory")
-                #await self.load_stage(container, loaded_stage_state)
+                # await self.load_stage(container, loaded_stage_state)
                 await self.set_user_data(stage_state=loaded_stage_state)
                 await self.step_and_send_timestep(container, loaded_stage_state.timestep)
 
@@ -464,6 +241,7 @@ class EnvStage(Stage):
             nepisodes=int(stage_state.nepisodes),
             nsuccesses=int(stage_state.nsuccesses),
         )
+
     async def save_experiment_data(self, args, timestep, user_stats):
         key = args['key']
         keydownTime = args.get('keydownTime')
@@ -516,16 +294,18 @@ class EnvStage(Stage):
             name = self.metadata.get('maze', self.name)
             if imageSeenTime is not None and keydownTime is not None:
                 stage_state = self.get_user_data('stage_state')
-                if self.verbosity: 
+                if self.verbosity:
                     logger.info(f'{name} saved file')
-                    logger.info(f'∆t: {time_diff(imageSeenTime, keydownTime)/1000.}')
+                    logger.info(
+                        f'∆t: {time_diff(imageSeenTime, keydownTime)/1000.}')
                     logger.info(f'stage state: {self.user_stats()}')
                     logger.info(f'env step: {stage_state.nsteps}')
 
             else:
                 logger.error(f'{name} saved file')
                 logger.error(f'stage state: {self.user_stats()}')
-                logger.error(f"imageSeenTime={imageSeenTime}, keydownTime={keydownTime}")
+                logger.error(
+                    f"imageSeenTime={imageSeenTime}, keydownTime={keydownTime}")
                 ui.notification(
                     "Error: Stage unexpectedly ending early",
                     type='negative')
@@ -574,19 +354,18 @@ class EnvStage(Stage):
     async def handle_key_press(self, event, container):
         # Get or create lock for this specific user
         async with self.get_user_lock():
-          if self.custom_key_press_fn is not None:
-              await self.custom_key_press_fn(event, container)
-          else:
-              await self._handle_key_press(event, container)
+            await self._handle_key_press(event, container)
 
     async def _handle_key_press(self, event, container):
-        if not self.get_user_data('started', False): return
+        if not self.get_user_data('started', False):
+            return
         if self.get_user_data('stage_finished', False):
             # if already did final save, just return
-            if self.get_user_data('final_save', False): return
+            if self.get_user_data('final_save', False):
+                return
 
             # did not do final save, so do so now
-            # want stage to end on keypress so that 
+            # want stage to end on keypress so that
             # notifications are visible at final timestep
             await self.finish_stage()
             # and dismiss any present notifications
@@ -599,10 +378,12 @@ class EnvStage(Stage):
             return
 
         key = event.args['key']
-        if self.verbosity: logger.info(f'handle_key_press key: {key}')
+        if self.verbosity:
+            logger.info(f'handle_key_press key: {key}')
 
         # check if valid environment interaction
-        if not key in self.key_to_action: return
+        if not key in self.key_to_action:
+            return
 
         # asynchonously save experiment data by putting in a save queue
         # save prior timestep + current event information
@@ -619,9 +400,11 @@ class EnvStage(Stage):
         episode_reset = timestep.first()
         if episode_reset:
             start_notification = self.pop_user_data('start_notification')
-            if start_notification: start_notification.dismiss()
+            if start_notification:
+                start_notification.dismiss()
             success_notification = self.pop_user_data('success_notification')
-            if success_notification: success_notification.dismiss()
+            if success_notification:
+                success_notification.dismiss()
 
         success = self.evaluate_success_fn(timestep)
 
@@ -655,7 +438,7 @@ class EnvStage(Stage):
             # image is normally updated client-side
             # when episode resets, update server-side
             update_display=episode_reset,
-            )
+        )
         ################
         # Episode over?
         ################
@@ -691,71 +474,3 @@ class EnvStage(Stage):
         await self.set_user_data(stage_finished=stage_finished)
 
     async def handle_button_press(self, container): pass  # do nothing
-
-
-@dataclasses.dataclass
-class Block:
-    stages: List[Stage]
-    randomize: Union[bool, List[bool]] = False
-    metadata: Dict[str, Any] = dataclasses.field(default_factory=dict)
-
-
-def prepare_blocks(blocks: List[Block]) -> List[Stage]:
-    """This function assigns the block metadata to each stage.
-    It also flattens all blocks into a single list of stages.
-    """
-    # assign block description to each stage description
-    for block_idx, block in enumerate(blocks):
-        for stage in block.stages:
-            block.metadata.update(idx=block_idx)
-            stage.metadata['block_metadata'] = block.metadata
-
-    # flatten all blocks
-    return [stage for block in blocks for stage in block.stages]
-
-def generate_stage_order(blocks: List[Block], block_order: List[int], rng_key: jnp.ndarray) -> List[int]:
-    """This function generates the order in which the stages should be displayed.
-    It takes the blocks and the block order as input and returns the stage order.
-
-    It also randomizes the order of the stages within each block if the block's randomize flag is True.
-    """
-    # Assign unique indices to each stage in each block
-    block_indices = {}
-    current_index = 0
-    for block_idx, block in enumerate(blocks):
-        block_indices[block_idx] = list(range(current_index, current_index + len(block.stages)))
-        current_index += len(block.stages)
-
-    # Generate the final stage order based on block_order
-    stage_order = []
-    for block_idx in block_order:
-        block = blocks[block_idx]
-        block_stage_indices = block_indices[block_idx]
-
-        if block.randomize:
-            if isinstance(block.randomize, bool):
-                randomize = [True]*len(block.stages)
-            else:
-                randomize = block.randomize
-                
-            indices = jnp.arange(len(block.stages))
-            mask = jnp.array(randomize)
-
-            # Get randomizable indices
-            random_indices = indices[mask]
-
-            # Permute the randomizable indices
-            rng_key, subkey = jax.random.split(rng_key)
-            random_indices = jax.random.permutation(subkey, random_indices)
-
-            # Combine back together
-            permuted = indices.at[mask].set(random_indices)
-
-            block_stage_indices = [block_stage_indices[i] for i in permuted]
-
-        stage_order.extend(block_stage_indices)
-
-    return stage_order
-
-
-
