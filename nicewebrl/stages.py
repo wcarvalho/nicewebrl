@@ -23,6 +23,7 @@ from nicewebrl.nicejax import new_rng, base64_npimage, make_serializable, TimeSt
 from nicewebrl.logging import get_logger
 from nicewebrl.utils import retry_with_exponential_backoff
 from nicewebrl.utils import wait_for_button_or_keypress
+from nicewebrl.utils import write_msgpack_record, read_all_records
 import msgpack
 
 
@@ -232,11 +233,8 @@ class FeedbackStage(Stage):
             metadata=metadata,
         )
         save_file = self.user_save_file_fn()
-        async with aiofiles.open(save_file, 'ab') as f:  # Changed to binary mode
-            # Use msgpack to serialize the data
-            packed_data = msgpack.packb(save_data)
-            await f.write(packed_data)
-            await f.write(b'\n')  # Add newline in binary mode
+        async with aiofiles.open(save_file, 'ab') as f:
+            await write_msgpack_record(f, save_data)
         await self.finish_stage()
 
 
@@ -260,7 +258,6 @@ class EnvStage(Stage):
         check_finished (Callable): Additional function to check if stage should end (beyond max_episodes/min_success).
         custom_data_fn (Callable): Optional function to extract additional data from timesteps for logging.
         state_cls (EnvStageState): Class used to store the stage's state information.
-        action_to_key (Dict[int, str]): Mapping from action indices to keyboard keys.
         action_to_name (Dict[int, str]): Optional mapping from action indices to human-readable names.
         next_button (bool): Whether to show a "next" button (default False).
         notify_success (bool): Whether to show success/failure notifications.
@@ -517,11 +514,9 @@ class EnvStage(Stage):
 
         # Use aiofiles for async file I/O
         save_file = self.user_save_file_fn()
-        async with aiofiles.open(save_file, 'ab') as f:  # Note: open in binary mode
-            # Use msgpack to serialize the data, including bytes
-            packed_data = msgpack.packb(save_data)
-            await f.write(packed_data)
-            await f.write(b'\n')  # Add newline in binary mode
+        async with aiofiles.open(save_file, 'ab') as f:
+            await write_msgpack_record(f, save_data)
+
             name = self.metadata.get('maze', self.name)
             if imageSeenTime is not None and keydownTime is not None:
                 stage_state = self.get_user_data('stage_state')

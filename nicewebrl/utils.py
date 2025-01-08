@@ -1,4 +1,5 @@
-
+from typing import List, Dict
+import aiofiles
 import functools
 import random
 from nicegui import ui, app
@@ -6,7 +7,7 @@ import asyncio
 from nicewebrl.logging import get_logger
 import jax
 import jax.numpy as jnp
-from nicegui import app
+import msgpack
 import os.path
 import random
 from datetime import datetime
@@ -160,3 +161,55 @@ def get_user_session_minutes():
     minutes_passed = duration.total_seconds() / 60
     app.storage.user['session_duration'] = minutes_passed
     return minutes_passed
+
+
+async def write_msgpack_record(f, data):
+    """Write a length-prefixed msgpack record to a file.
+    
+    Args:
+        f: An aiofiles file object opened in binary mode
+        data: The data to write
+    """
+    packed_data = msgpack.packb(data)
+    length = len(packed_data)
+    await f.write(length.to_bytes(4, byteorder='big'))
+    await f.write(packed_data)
+
+async def read_msgpack_records(filepath: str):
+  """Read length-prefixed msgpack records from a file.
+  
+  Args:
+      filepath: Path to the file containing the records
+      
+  Yields:
+      Decoded msgpack records one at a time
+  """
+  async with aiofiles.open(filepath, 'rb') as f:
+      while True:
+          # Read length prefix (4 bytes)
+          length_bytes = await f.read(4)
+          if not length_bytes:  # End of file
+              break
+
+          # Convert bytes to integer
+          length = int.from_bytes(length_bytes, byteorder='big')
+
+          # Read the record data
+          data = await f.read(length)
+          if len(data) < length:  # Incomplete record
+              logger.error(
+                  f"Corrupt data in {filepath}: Expected {length} bytes but got {len(data)}")
+              break
+
+          # Unpack and yield the record
+          try:
+              record = msgpack.unpackb(data)
+              yield record
+          except Exception as e:
+              logger.error(f"Failed to unpack record in {filepath}: {e}")
+              break
+
+
+async def read_all_records(filepath: str) -> List[Dict]:
+  """Helper function to read all records into a list."""
+  return [record async for record in read_msgpack_records(filepath)]
