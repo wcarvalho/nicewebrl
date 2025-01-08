@@ -326,21 +326,21 @@ class JaxWebEnv:
 
     def precompile(self, dummy_env_params: struct.PyTreeNode) -> None:
         """Call this function to pre-compile jax functions before experiment starts."""
-        logger.info("Compiling jax environment functions.")
+        print("Compiling jax environment functions.")
         start = time.time()
         dummy_rng = jax.random.PRNGKey(0)
         self.reset = self.reset.lower(dummy_rng, dummy_env_params).compile()
         timestep = self.reset(dummy_rng, dummy_env_params)
         self.next_steps = self.next_steps.lower(
             dummy_rng, timestep, dummy_env_params).compile()
-        logger.info(f"\ttime: {time.time()-start}")
+        print(f"\ttime: {time.time()-start}")
 
     def precompile_vmap_render_fn(
             self,
             render_fn: RenderFn,
             dummy_env_params: struct.PyTreeNode) -> RenderFn:
         """Call this function to pre-compile a multi-render function before experiment starts."""
-        logger.info("Compiling multi-render function.")
+        print("Compiling multi-render function.")
         start = time.time()
         vmap_render_fn = jax.jit(jax.vmap(render_fn))
         dummy_rng = jax.random.PRNGKey(0)
@@ -349,6 +349,6 @@ class JaxWebEnv:
             dummy_rng, timestep, dummy_env_params)
         vmap_render_fn = vmap_render_fn.lower(
             next_timesteps).compile()
-        logger.info(f"\ttime: {time.time()-start}")
+        print(f"\ttime: {time.time()-start}")
         return vmap_render_fn
 

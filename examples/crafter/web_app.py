@@ -1,19 +1,16 @@
 import os.path
 import asyncio
 from asyncio import Lock
-from datetime import datetime, timedelta
-from typing import Callable, Awaitable
 from nicegui import app, ui
 from fastapi import Request
 from tortoise import Tortoise
-from tortoise.contrib.pydantic import pydantic_model_creator
 
 import nicewebrl
 from nicewebrl.logging import setup_logging, get_logger
 from nicewebrl.utils import wait_for_button_or_keypress
 from nicewebrl import stages
 
-import environment
+import experiment
 
 DATA_DIR = 'data'
 DATABASE_FILE = 'db.sqlite'
@@ -37,7 +34,7 @@ async def experiment_not_finished():
   """Check if the experiment is not finished"""
   async with get_user_lock():
     not_finished = not app.storage.user.get('experiment_finished', False)
-    not_finished &= app.storage.user['stage_idx'] < len(environment.all_stages)
+    not_finished &= app.storage.user['stage_idx'] < len(experiment.all_stages)
   return not_finished
 
 
@@ -50,10 +47,10 @@ async def global_handle_key_press(e, container):
     """
 
     stage_idx = app.storage.user['stage_idx']
-    if app.storage.user['stage_idx'] >= len(environment.all_stages):
+    if app.storage.user['stage_idx'] >= len(experiment.all_stages):
         return
     
-    stage = environment.all_stages[stage_idx]
+    stage = experiment.all_stages[stage_idx]
     if stage.get_user_data('finished', False):
       return
 
@@ -81,9 +78,8 @@ if not os.path.exists(DATA_DIR):
 async def init_db() -> None:
     await Tortoise.init(
         db_url=f'sqlite://{DATA_DIR}/{DATABASE_FILE}',
-        # this will look in models.py,
-        # models.py uses defaults from nicewebrl
-        modules={'models': ['models']})
+        # this will use nicewebrl.stages.StageStateModel
+        modules={'models': ['nicewebrl.stages']})
     await Tortoise.generate_schemas()
 
 async def close_db() -> None:
@@ -112,7 +108,7 @@ async def start_experiment(container):
   while True and await experiment_not_finished():
       # get current stage
       stage_idx = app.storage.user['stage_idx']
-      stage = environment.all_stages[stage_idx]
+      stage = experiment.all_stages[stage_idx]
 
       logger.info("="*30)
       logger.info(f"Began stage '{stage.name}'")
@@ -131,7 +127,7 @@ async def start_experiment(container):
         app.storage.user['stage_idx'] = stage_idx + 1
 
       # check if we've finished all stages
-      if app.storage.user['stage_idx'] >= len(environment.all_stages):
+      if app.storage.user['stage_idx'] >= len(experiment.all_stages):
           break
 
   await finish_experiment(container)

@@ -19,7 +19,7 @@ from tortoise import fields, models
 
 from nicegui import app, ui
 from nicewebrl import nicejax, clear_element
-from nicewebrl.nicejax import new_rng, base64_npimage, make_serializable
+from nicewebrl.nicejax import new_rng, base64_npimage, make_serializable, TimeStep
 from nicewebrl.logging import get_logger
 from nicewebrl.utils import retry_with_exponential_backoff
 from nicewebrl.utils import wait_for_button_or_keypress
@@ -31,14 +31,13 @@ FeedbackFn = Callable[[struct.PyTreeNode], Dict]
 
 logger = get_logger(__name__)
 
-Timestep = struct.PyTreeNode
 Image = jnp.ndarray
 Params = struct.PyTreeNode
 
-TimestepCallFn = Callable[[Timestep, Params], None]
-RenderFn = Callable[[Timestep], Image]
+TimestepCallFn = Callable[[TimeStep], None]
+RenderFn = Callable[[TimeStep], Image]
 
-DisplayFn = Callable[["Stage", ui.element, Timestep], None]
+DisplayFn = Callable[["Stage", ui.element, TimeStep], None]
 
 def time_diff(t1, t2) -> float:
     # Convert string timestamps to datetime objects
@@ -233,9 +232,11 @@ class FeedbackStage(Stage):
             metadata=metadata,
         )
         save_file = self.user_save_file_fn()
-        async with aiofiles.open(save_file, 'a') as f:
-            # Write the dictionary as a JSON string and add a newline
-            await f.write(json.dumps(save_data) + '\n')
+        async with aiofiles.open(save_file, 'ab') as f:  # Changed to binary mode
+            # Use msgpack to serialize the data
+            packed_data = msgpack.packb(save_data)
+            await f.write(packed_data)
+            await f.write(b'\n')  # Add newline in binary mode
         await self.finish_stage()
 
 
@@ -420,10 +421,7 @@ class EnvStage(Stage):
 
         # NEW EPISODE
         timestep = self.web_env.reset(rng, self.env_params)
-        return self.state_cls(timestep=timestep).replace(
-            nepisodes=1,
-            nsteps=1,
-        )
+        return self.state_cls(timestep=timestep)
 
     async def activate(self, container: ui.element):
         """

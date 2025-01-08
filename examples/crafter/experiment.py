@@ -11,37 +11,17 @@ from craftax.craftax import craftax_state
 
 
 import nicewebrl
-from nicewebrl import JaxWebEnv, base64_npimage, TimestepWrapper
-from nicewebrl import Stage, EnvStage, EnvStageState
+from nicewebrl import JaxWebEnv, base64_npimage, TimeStep, TimestepWrapper
+from nicewebrl import Stage, EnvStage
 from nicewebrl import get_logger
 
 
 logger = get_logger(__name__)
 
 MAX_STAGE_EPISODES = 1
-MAX_EPISODE_TIMESTEPS = 10
+MAX_EPISODE_TIMESTEPS = 10000
 MIN_SUCCESS_EPISODES = 1
 VERBOSITY = 1
-
-
-########################################
-# Define objects to help with automatic serialization/deserialization
-########################################
-
-class TimeStep(struct.PyTreeNode):
-    state: craftax_state.EnvState  # override state to one used by craftax
-    step_type: jax.Array
-    reward: jax.Array
-    discount: jax.Array
-    observation: jax.Array
-
-
-@struct.dataclass
-class EnvStageState:
-    timestep: TimeStep  # use as member here
-    nsteps: int = 0
-    nepisodes: int = 0
-    nsuccesses: int = 0
 
 
 ########################################
@@ -72,7 +52,7 @@ jax_web_env = JaxWebEnv(
 jax_web_env.precompile(dummy_env_params=dummy_env_params)
 
 # Define rendering function
-def render_fn(timestep: TimeStep):
+def render_fn(timestep: nicewebrl.TimeStep):
     image = render_craftax_pixels(
         timestep.state, block_pixel_size=BLOCK_PIXEL_SIZE_HUMAN)
     return image.astype(jnp.uint8)
@@ -97,7 +77,11 @@ async def instruction_display_fn(stage, container):
     with container.style('align-items: center;'):
         nicewebrl.clear_element(container)
         ui.markdown(f"## {stage.name}")
-        ui.markdown("These are instructions")
+        ui.markdown(
+           """
+          - Press the arrow keys to move the agent
+          - Press the space bar to interact with objects
+          """)
 
 instruction_stage = Stage(
     name="Instuctions",
@@ -128,7 +112,7 @@ async def env_stage_display_fn(
     timestep: TimeStep):
   state_image = stage.render_fn(timestep)
   state_image = base64_npimage(state_image)
-  stage_state: EnvStageState = stage.get_user_data('stage_state')
+  stage_state = stage.get_user_data('stage_state')
 
   with container.style('align-items: center;'):
     nicewebrl.clear_element(container)
