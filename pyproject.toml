@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nicewebrl"
-version = "0.0.2"
+version = "0.0.3"
 authors = [
     {name = "Wilka Carvalho", email = "wcarvalho92@gmail.com"},
 ]
@@ -20,10 +20,10 @@ dependencies = [
     "nicegui",
     "tortoise-orm",
     "Pillow",
-    "jax>=0.4.16,<=0.4.20",
-    "jaxlib>=0.4.16,<=0.4.20",
+    "jax>=0.1.55,<=0.4.26",
+    "jaxlib>=0.1.55,<=0.4.26",
     "distrax>=0.1.5",
-    "flax>=0.8.2",
+    "flax>=0.8.4",
     "numpy>=1.26.4,<2",
     "polars",
 ]

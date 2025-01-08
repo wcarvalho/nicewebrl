@@ -33,8 +33,9 @@ logger = get_logger(__name__)
 
 Timestep = struct.PyTreeNode
 Image = jnp.ndarray
+Params = struct.PyTreeNode
 
-TimestepCallFn = Callable[[Timestep], None]
+TimestepCallFn = Callable[[Timestep, Params], None]
 RenderFn = Callable[[Timestep], Image]
 
 DisplayFn = Callable[["Stage", ui.element, Timestep], None]
@@ -286,6 +287,7 @@ class EnvStage(Stage):
     notify_success: bool = True
     msg_display_time: int = None
     user_save_file_fn: Optional[Callable[[], str]] = None
+    autoreset_on_done: bool = False
     verbosity: int = 0
 
     def __post_init__(self):
@@ -338,6 +340,17 @@ class EnvStage(Stage):
             container,
             timestep,
             update_display: bool = True):
+        #############################
+        # automatically reset on done if flag is set
+        #############################
+        if self.autoreset_on_done:
+            if timestep.last():
+                rng = new_rng()
+                timestep = self.web_env.reset(rng, self.env_params)
+                stage_state = self.get_user_data('stage_state')
+                stage_state = stage_state.replace(timestep=timestep)
+                await self.set_user_data(stage_state=stage_state)
+
         #############################
         # get next images and store them client-side
         # setup code to display next state
@@ -411,38 +424,6 @@ class EnvStage(Stage):
             nepisodes=1,
             nsteps=1,
         )
-
-    #async def start_stage(
-    #        self,
-    #        container: ui.element,
-    #        stage_state: Optional[EnvStageState] = None):
-    #    #rng = new_rng()
-
-    #    # NEW EPISODE
-    #    if stage_state is None:
-    #      stage_state = await self.reset_stage()
-    #    await self.set_user_data(stage_state=stage_state)
-    #    asyncio.create_task(save_stage_state(stage_state))
-
-    #    # DISPLAY NEW EPISODE
-    #    await self.wait_for_start(container, stage_state.timestep)
-    #    await self.step_and_send_timestep(
-    #        container, stage_state.timestep)
-
-    #async def load_stage(
-    #        self,
-    #        container: ui.element,
-    #        stage_state: EnvStageState,
-    #        ):
-    #    #rng = new_rng()
-    #    #timestep = nicejax.match_types(
-    #    #    example=self.web_env.reset(rng, self.env_params),
-    #    #    data=stage_state.timestep)
-    #    #await self.set_user_data(stage_state=stage_state.replace(
-    #    #    timestep=timestep),
-    #    #)
-    #    await self.set_user_data(stage_state=stage_state)
-    #    await self.step_and_send_timestep(container, stage_state.timestep)
 
     async def activate(self, container: ui.element):
         """
@@ -650,7 +631,7 @@ class EnvStage(Stage):
             success_notification = self.pop_user_data('success_notification')
             if success_notification: success_notification.dismiss()
 
-        success = self.evaluate_success_fn(timestep)
+        success = self.evaluate_success_fn(timestep, self.env_params)
 
         stage_state = self.get_user_data('stage_state')
         stage_state = stage_state.replace(
@@ -691,6 +672,7 @@ class EnvStage(Stage):
                 logger.info("-"*20)
                 logger.info("episode over")
                 logger.info("-"*20)
+
             start_notification = None
             if not stage_finished:
                 start_notification = ui.notification(
