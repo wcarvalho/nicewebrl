@@ -13,10 +13,6 @@ from flax import struct
 from flax import serialization
 import jax
 import jax.numpy as jnp
-# from jax.tree_util import tree_flatten, tree_unflatten, tree_structure
-# import json
-# import random
-# from tortoise import fields, models
 
 from nicegui import app, ui, Client
 from nicewebrl import nicejax, clear_element

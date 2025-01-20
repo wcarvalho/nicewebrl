@@ -16,11 +16,14 @@ pip install -e .
 
 # Getting Started
 
+### Craftax
 We've provided an example of making a web app to have humans control a craftax agent in `examples/craftax`.
+
+![Crafter Environment](https://raw.githubusercontent.com/MichaelTMatthews/Craftax/main/images/building.gif)
 
 **(1) Install nicewebrl with examples**
 ```bash
-pip install -e ".[examples]"  
+pip install "git+https://github.com/wcarvalho/nicewebrl.git#egg=nicewebrl[craftax]"
 ```
 
 **(2) run the web app from the directory**
@@ -31,6 +34,15 @@ python web_app.py
 **NOTE**: this will make a `data` and `.nicegui` folder which you can delete to remove user data.
 
 **COMING SOON**: Instructions for putting this on a remote server.
+
+### Overcooked
+![Overcooked Environment](https://github.com/FLAIROx/JaxMARL/blob/main/docs/imgs/cramped_room.gif?raw=true)
+
+```bash
+pip install "git+https://github.com/wcarvalho/nicewebrl.git#egg=nicewebrl[jaxmarl]"
+cd examples/overcooked
+python web_app.py
+```
 
 # Jax environments
 
