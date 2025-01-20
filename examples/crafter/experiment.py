@@ -100,11 +100,11 @@ env_params = jax_env.default_params.replace(
 
 
 def make_image_html(src):
-  html = f'''
+  html = f"""
   <div id="stateImageContainer" style="display: flex; justify-content: center; align-items: center;">
       <img id="stateImage" src="{src}" style="width: 50%; height: 50%; object-fit: contain;">
   </div>
-  '''
+  """
   return html
 
 

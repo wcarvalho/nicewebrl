@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nicewebrl"
-version = "0.0.2"
+version = "0.0.3"
 authors = [
     {name = "Wilka Carvalho", email = "wcarvalho92@gmail.com"},
 ]

@@ -23,6 +23,7 @@ from nicewebrl.nicejax import new_rng, base64_npimage, make_serializable, TimeSt
 from nicewebrl.logging import get_logger
 from nicewebrl.utils import retry_with_exponential_backoff
 from nicewebrl.utils import wait_for_button_or_keypress
+from nicewebrl.utils import write_msgpack_record, read_all_records
 import msgpack
 
 
@@ -32,6 +33,7 @@ FeedbackFn = Callable[[struct.PyTreeNode], Dict]
 logger = get_logger(__name__)
 
 Image = jnp.ndarray
+Params = struct.PyTreeNode
 
 TimestepCallFn = Callable[[TimeStep], None]
 RenderFn = Callable[[TimeStep], Image]
@@ -248,11 +250,8 @@ class FeedbackStage(Stage):
       metadata=metadata,
     )
     save_file = self.user_save_file_fn()
-    async with aiofiles.open(save_file, "ab") as f:  # Changed to binary mode
-      # Use msgpack to serialize the data
-      packed_data = msgpack.packb(save_data)
-      await f.write(packed_data)
-      await f.write(b"\n")  # Add newline in binary mode
+    async with aiofiles.open(save_file, "ab") as f:
+      await write_msgpack_record(f, save_data)
     await self.finish_stage()
 
 
@@ -276,7 +275,6 @@ class EnvStage(Stage):
       check_finished (Callable): Additional function to check if stage should end (beyond max_episodes/min_success).
       custom_data_fn (Callable): Optional function to extract additional data from timesteps for logging.
       state_cls (EnvStageState): Class used to store the stage's state information.
-      action_to_key (Dict[int, str]): Mapping from action indices to keyboard keys.
       action_to_name (Dict[int, str]): Optional mapping from action indices to human-readable names.
       next_button (bool): Whether to show a "next" button (default False).
       notify_success (bool): Whether to show success/failure notifications.
@@ -304,6 +302,7 @@ class EnvStage(Stage):
   notify_success: bool = True
   msg_display_time: int = None
   user_save_file_fn: Optional[Callable[[], str]] = None
+  autoreset_on_done: bool = False
   verbosity: int = 0
 
   def __post_init__(self):
@@ -352,9 +351,45 @@ class EnvStage(Stage):
       )
       queue.task_done()
 
+  async def display_timestep(self, container, timestep):
+    await self.display_fn(
+      stage=self,
+      container=container,
+      timestep=timestep,
+    )
+
+    attempt = 0
+    while True:
+      attempt += 1
+      try:
+        # Set the timestamp in the browser
+        await ui.run_javascript("window.imageSeenTime = new Date();", timeout=2)
+        # If successful, we can return immediately
+        return
+      except Exception as e:
+        if attempt % 10 == 0:  # Log every 10 attempts
+          logger.warning(
+            f"{self.name}: Error getting imageSeenTime (attempt {attempt}): {e}"
+          )
+        await asyncio.sleep(0.1)  # Short delay between attempts
+        if attempt > 100:
+          ui.notify("Please refresh the page", type="negative")
+          return
+
   async def step_and_send_timestep(
     self, container, timestep, update_display: bool = True
   ):
+    #############################
+    # automatically reset on done if flag is set
+    #############################
+    if self.autoreset_on_done:
+      if timestep.last():
+        rng = new_rng()
+        timestep = self.web_env.reset(rng, self.env_params)
+        stage_state = self.get_user_data("stage_state")
+        stage_state = stage_state.replace(timestep=timestep)
+        await self.set_user_data(stage_state=stage_state)
+
     #############################
     # get next images and store them client-side
     # setup code to display next state
@@ -377,30 +412,7 @@ class EnvStage(Stage):
     # display image
     #############################
     if update_display:
-      await self.display_fn(
-        stage=self,
-        container=container,
-        timestep=timestep,
-      )
-
-      attempt = 0
-      while True:
-        attempt += 1
-        try:
-          # Set the timestamp in the browser
-          await ui.run_javascript("window.imageSeenTime = new Date();", timeout=2)
-          # If successful, we can return immediately
-          return
-        except Exception as e:
-          if attempt % 10 == 0:  # Log every 10 attempts
-            logger.warning(
-              f"{self.name}: Error getting imageSeenTime (attempt {attempt}): {e}"
-            )
-          await asyncio.sleep(0.1)  # Short delay between attempts
-          if attempt > 100:
-            ui.notify(f"Please refresh the page", type="negative")
-            return
-
+      await self.display_timestep(container, timestep)
     else:
       ui.run_javascript("window.imageSeenTime = window.next_imageSeenTime;", timeout=10)
 
@@ -517,11 +529,9 @@ class EnvStage(Stage):
 
     # Use aiofiles for async file I/O
     save_file = self.user_save_file_fn()
-    async with aiofiles.open(save_file, "ab") as f:  # Note: open in binary mode
-      # Use msgpack to serialize the data, including bytes
-      packed_data = msgpack.packb(save_data)
-      await f.write(packed_data)
-      await f.write(b"\n")  # Add newline in binary mode
+    async with aiofiles.open(save_file, "ab") as f:
+      await write_msgpack_record(f, save_data)
+
       name = self.metadata.get("maze", self.name)
       if imageSeenTime is not None and keydownTime is not None:
         stage_state = self.get_user_data("stage_state")
@@ -535,6 +545,7 @@ class EnvStage(Stage):
         logger.error(f"{name} saved file")
         logger.error(f"stage state: {self.user_stats()}")
         logger.error(f"imageSeenTime={imageSeenTime}, keydownTime={keydownTime}")
+        ui.notification("Error: Stage unexpectedly ending early", type="negative")
         await self.set_user_data(finished=True, final_save=True)
 
     await self.set_user_data(saved_data=True)
@@ -576,10 +587,7 @@ class EnvStage(Stage):
   async def handle_key_press(self, event, container):
     # Get or create lock for this specific user
     async with self.get_user_lock():
-      if self.custom_key_press_fn is not None:
-        await self.custom_key_press_fn(event, container)
-      else:
-        await self._handle_key_press(event, container)
+      await self._handle_key_press(event, container)
 
   async def _handle_key_press(self, event, container):
     if not self.get_user_data("started", False):
@@ -631,7 +639,7 @@ class EnvStage(Stage):
       if success_notification:
         success_notification.dismiss()
 
-    success = self.evaluate_success_fn(timestep)
+    success = self.evaluate_success_fn(timestep, self.env_params)
 
     stage_state = self.get_user_data("stage_state")
     stage_state = stage_state.replace(
@@ -675,6 +683,7 @@ class EnvStage(Stage):
         logger.info("-" * 20)
         logger.info("episode over")
         logger.info("-" * 20)
+
       start_notification = None
       if not stage_finished:
         start_notification = ui.notification(

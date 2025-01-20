@@ -3,26 +3,28 @@ import itertools
 import asyncio
 from asyncio import Lock
 import aiofiles
-#import base64
+
+# import base64
 import copy
 import dataclasses
-#from datetime import datetime
+# from datetime import datetime
 
 from flax import struct
 from flax import serialization
 import jax
 import jax.numpy as jnp
-#from jax.tree_util import tree_flatten, tree_unflatten, tree_structure
-#import json
-#import random
-#from tortoise import fields, models
+# from jax.tree_util import tree_flatten, tree_unflatten, tree_structure
+# import json
+# import random
+# from tortoise import fields, models
 
 from nicegui import app, ui, Client
 from nicewebrl import nicejax, clear_element
 from nicewebrl.nicejax import new_rng, base64_npimage, make_serializable, TimeStep
 from nicewebrl.logging import get_logger
 from nicewebrl.utils import retry_with_exponential_backoff
-#from nicewebrl.utils import wait_for_button_or_keypress
+
+# from nicewebrl.utils import wait_for_button_or_keypress
 from nicewebrl import Stage, EnvStageState
 from nicewebrl.stages import safe_save, time_diff, StageStateModel
 from nicewebrl import broadcast_message
@@ -394,7 +396,9 @@ class MultiHumanLeaderFollowerEnvStage(Stage):
       # if already did final save, just return
       logger.info("stage.handle_key_press: stage already finished")
       if self.get_room_data("final_save", False):
-        logger.info("stage.handle_key_press: stage already finished and final save done")
+        logger.info(
+          "stage.handle_key_press: stage already finished and final save done"
+        )
         return
       logger.info("stage.handle_key_press: saving")
 
@@ -440,7 +444,9 @@ class MultiHumanLeaderFollowerEnvStage(Stage):
         asyncio.create_task(self._process_save_queue())
 
       await self.set_room_data(key_presses=key_presses)
-    logger.info(f"stage.handle_key_press: {len(key_presses)} key_presses: {key_presses}")
+    logger.info(
+      f"stage.handle_key_press: {len(key_presses)} key_presses: {key_presses}"
+    )
 
     ############################################
     # check if all room users have pressed a key
@@ -595,7 +601,6 @@ class MultiHumanLeaderFollowerEnvStage(Stage):
       nsuccesses=stage_state.nsuccesses + success,
     )
     if app.storage.user["leader"]:
-
       # asynchronously save stage state
       # TODO: change saving of stage state so based on room
       asyncio.create_task(save_stage_state(stage_state))
