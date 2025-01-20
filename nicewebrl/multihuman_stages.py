@@ -29,7 +29,7 @@ from nicewebrl import Stage, EnvStageState
 from nicewebrl.stages import safe_save, time_diff, StageStateModel
 from nicewebrl import broadcast_message
 import msgpack
-
+from nicewebrl.utils import write_msgpack_record
 
 FeedbackFn = Callable[[struct.PyTreeNode], Dict]
 
@@ -522,20 +522,17 @@ class MultiHumanLeaderFollowerEnvStage(Stage):
     save_file = self.user_save_file_fn()
     async with aiofiles.open(save_file, "ab") as f:  # Note: open in binary mode
       # Use msgpack to serialize the data, including bytes
-      packed_data = msgpack.packb(save_data)
-      await f.write(packed_data)
-      await f.write(b"\n")  # Add newline in binary mode
-      name = self.metadata.get("maze", self.name)
+      await write_msgpack_record(f, save_data)
       if imageSeenTime is not None and keydownTime is not None:
         stage_state = self.get_room_data("stage_state")
         if self.verbosity:
-          logger.info(f"{name} saved file")
+          logger.info(f"{self.name} saved file")
           logger.info(f"∆t: {time_diff(imageSeenTime, keydownTime) / 1000.0}")
           logger.info(f"stage state: {self.user_stats()}")
           logger.info(f"env step: {stage_state.nsteps}")
 
       else:
-        logger.error(f"{name} saved file")
+        logger.error(f"{self.name} saved file")
         logger.error(f"stage state: {self.user_stats()}")
         logger.error(f"imageSeenTime={imageSeenTime}, keydownTime={keydownTime}")
         ui.notification("Error: Stage unexpectedly ending early", type="negative")
