@@ -35,7 +35,7 @@ async function userMessage(
   event,
   stage,
   message) {
-  console.log(event, message)
+  console.log(event, stage, message)
   await emitEvent(event, {
     called_by_room_id: called_by_room_id,
     called_by_user_id: called_by_user_id,
@@ -43,6 +43,32 @@ async function userMessage(
     stage: stage,
     message: message,
   });
+}
+
+
+// Function to select next image based on environment actions
+async function updateEnvironment(room_id, action_key) {
+  console.log(room_id, action_key)
+  if (room_id !== window.room) {
+    console.log('room_id !== window.room', room_id, window.room)
+    return;
+  }
+  if (action_key == 'starting') {
+    return;
+  }
+  if (!window.require_fullscreen || await isFullscreen() ) {
+    next_state = window.next_states[action_key];
+    var imgElement = document.getElementById('stateImage');
+    if (imgElement !== null) {
+      imgElement.src = next_state;
+    }
+    window.next_imageSeenTime = new Date();
+    console.log('set new image');
+    await emitEvent('update_environment', {
+      called_by_room_id: window.room,
+      action_key: action_key,
+    });
+  }
 }
 
 document.addEventListener('DOMContentLoaded', async function () {
@@ -74,34 +100,41 @@ document.addEventListener('DOMContentLoaded', async function () {
 
     // Handle key presses
     console.log(event.key);
-    if (window.next_states !== null && window.accept_keys && event.key in window.next_states) {
-      if (!window.require_fullscreen || await isFullscreen() ) {
-        next_state = window.next_states[event.key];
-        var imgElement = document.getElementById('stateImage');
-        if (imgElement !== null) {
-          imgElement.src = next_state;
-        }
-        window.next_imageSeenTime = new Date();
-        console.log('set new image');
-      }
-      // Record the current time when the keydown event occurs
-      var keydownTime = new Date();
-      // Await the asynchronous emitEvent call
-      await emitEvent('key_pressed', {
-        key: event.key,
-        keydownTime: keydownTime,
-        imageSeenTime: window.imageSeenTime,
-        client: window.user_id,
-        room: window.room,
-      });
-    }
-    else {
-      await emitEvent('key_pressed', {
-        key: event.key,
-        client: window.user_id,
-        room: window.room,
-      });
-    }
+    //console.log('window.next_states !== null', window.next_states !== null)
+    //console.log('window.accept_keys', window.accept_keys)
+    //console.log('event.key in window.next_states', event.key in window.next_states)
+    //if (window.next_states !== null && window.accept_keys && event.key in window.next_states) {
+    //  if (!window.require_fullscreen || await isFullscreen() ) {
+    //    next_state = window.next_states[event.key];
+    //    var imgElement = document.getElementById('stateImage');
+    //    if (imgElement !== null) {
+    //      imgElement.src = next_state;
+    //    }
+    //    window.next_imageSeenTime = new Date();
+    //    console.log('set new image');
+    //  }
+    //  // Record the current time when the keydown event occurs
+      //var keydownTime = new Date();
+      //// Await the asynchronous emitEvent call
+      //await emitEvent('key_pressed', {
+      //  key: event.key,
+      //  keydownTime: keydownTime,
+      //  imageSeenTime: window.imageSeenTime,
+      //  client: window.user_id,
+      //  room: window.room,
+      //});
+    //}
+    //// REGULAR KEY PRRESS
+    //else {
+    var keydownTime = new Date();
+    await emitEvent('key_pressed', {
+      key: event.key,
+      client: window.user_id,
+      room: window.room,
+      imageSeenTime: window.imageSeenTime,
+      keydownTime: keydownTime,
+    });
+    //}
 
   });
 })
