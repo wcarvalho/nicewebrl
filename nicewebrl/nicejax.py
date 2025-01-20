@@ -1,12 +1,10 @@
-from functools import partial
-
 import time
 import typing
 from datetime import datetime
 from typing import Optional
 from typing import Union, Any, Callable, Tuple
 from typing import get_type_hints
-from base64 import b64encode, b64decode
+from base64 import b64encode
 from flax import struct
 from flax import serialization
 import io
