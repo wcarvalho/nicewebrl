@@ -328,9 +328,6 @@ def add_user_to_room():
     app.storage.user["leader"] = True
     user_to_action_idx[user_id] = 0
 
-    print("Latest room id:")
-    print(app.storage.general["latest_room_id"])
-
     return latest_room_id, latest_room
 
   if no_rooms:
@@ -348,7 +345,6 @@ def add_user_to_room():
       user_to_action_idx[user_id] = len(latest_room)
       latest_room.append(user_id)
 
-  logger.info("leader =" + str(app.storage.user["leader"]))
   app.storage.general["rooms"] = rooms
   app.storage.general["user_to_action_idx"] = user_to_action_idx
   return latest_room_id, latest_room
@@ -385,7 +381,7 @@ async def index(request: Request):
       user_room_id, room = add_user_to_room()
     app.storage.user["room_id"] = user_room_id
 
-  print(" ================== rooms ==================")
+  print("================== rooms ==================")
   rooms = app.storage.general.get("rooms", {})
   for i, (room_id, room_users) in enumerate(rooms.items()):
     print(f"{i}. {room_id}: {room_users}")
@@ -418,7 +414,6 @@ async def room_page():
   ################
   # Start experiment
   ################
-
   card = (
     ui.card(align_items=["center"])
     .classes("fixed-center")

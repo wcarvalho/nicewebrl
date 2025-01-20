@@ -230,7 +230,7 @@ actions = [
   Actions.interact,
 ]
 action_array = jnp.array([a.value for a in actions])
-action_keys = ["ArrowUp", "ArrowDown", "ArrowRight", "ArrowLeft","s", " "]
+action_keys = ["ArrowUp", "ArrowDown", "ArrowRight", "ArrowLeft", "s", " "]
 action_to_name = [a.name for a in actions]
 
 ########################################
@@ -459,7 +459,7 @@ async def env_stage_display_fn(
           stage_state, "nepisodes", lambda n: f"Try: {n}/{stage.max_episodes}"
         )
 
-    agent_color = 'blue' if app.storage.user["leader"] else 'red'
+    agent_color = "blue" if app.storage.user["leader"] else "red"
     ui.html(f'<span style="color: {agent_color}">Agent color: {agent_color}</span>')
     # --------------------------------
     # display environment
