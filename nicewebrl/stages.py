@@ -3,7 +3,6 @@ from typing import List, Any, Callable, Dict, Optional, Union
 import asyncio
 from asyncio import Lock
 import aiofiles
-import base64
 import copy
 import dataclasses
 from datetime import datetime
@@ -12,19 +11,15 @@ from flax import struct
 from flax import serialization
 import jax
 import jax.numpy as jnp
-from jax.tree_util import tree_flatten, tree_unflatten, tree_structure
-import json
 import random
 from tortoise import fields, models
 
 from nicegui import app, ui
-from nicewebrl import nicejax, clear_element
 from nicewebrl.nicejax import new_rng, base64_npimage, make_serializable, TimeStep
 from nicewebrl.logging import get_logger
 from nicewebrl.utils import retry_with_exponential_backoff
-from nicewebrl.utils import wait_for_button_or_keypress
-from nicewebrl.utils import write_msgpack_record, read_all_records
-import msgpack
+from nicewebrl.utils import write_msgpack_record
+from nicewebrl.nicejax import JaxWebEnv
 
 
 FeedbackFn = Callable[[struct.PyTreeNode], Dict]
@@ -287,7 +282,7 @@ class EnvStage(Stage):
   instruction: str = "instruction"
   min_success: Optional[int] = 1
   max_episodes: Optional[int] = 10
-  web_env: nicejax.JaxWebEnv = None
+  web_env: JaxWebEnv = None
   env_params: struct.PyTreeNode = None
   render_fn: RenderFn = None
   reset_display_fn: Optional[DisplayFn] = None
@@ -380,17 +375,6 @@ class EnvStage(Stage):
     self, container, timestep, update_display: bool = True
   ):
     #############################
-    # automatically reset on done if flag is set
-    #############################
-    if self.autoreset_on_done:
-      if timestep.last():
-        rng = new_rng()
-        timestep = self.web_env.reset(rng, self.env_params)
-        stage_state = self.get_user_data("stage_state")
-        stage_state = stage_state.replace(timestep=timestep)
-        await self.set_user_data(stage_state=stage_state)
-
-    #############################
     # get next images and store them client-side
     # setup code to display next state
     #############################
@@ -442,38 +426,37 @@ class EnvStage(Stage):
     If no stage state is found, continue with the new stage state.
     """
 
-    async with self.get_user_lock():
-      if self.verbosity:
-        logger.info("=" * 30)
-      if self.verbosity:
-        logger.info(self.metadata)
+    if self.verbosity:
+      logger.info("=" * 30)
+    if self.verbosity:
+      logger.info(self.metadata)
 
-      # reset stage
-      rng = new_rng()
-      timestep = self.web_env.reset(rng, self.env_params)
-      new_stage_state = self.state_cls(timestep=timestep)
+    # reset stage
+    rng = new_rng()
+    timestep = self.web_env.reset(rng, self.env_params)
+    new_stage_state = self.state_cls(timestep=timestep)
 
-      # (potentially) load stage state from memory
-      loaded_stage_state = await get_latest_stage_state(example=new_stage_state)
+    # (potentially) load stage state from memory
+    loaded_stage_state = await get_latest_stage_state(example=new_stage_state)
 
-      if loaded_stage_state is None:
-        logger.info("No stage state found, starting new stage")
-        # await self.start_stage(container, new_stage_state)
-        await self.set_user_data(stage_state=new_stage_state)
-        asyncio.create_task(save_stage_state(new_stage_state))
+    if loaded_stage_state is None:
+      logger.info("No stage state found, starting new stage")
+      # await self.start_stage(container, new_stage_state)
+      await self.set_user_data(stage_state=new_stage_state)
+      asyncio.create_task(save_stage_state(new_stage_state))
 
-        # DISPLAY NEW EPISODE
-        await self.wait_for_start(container, new_stage_state.timestep)
-        await self.step_and_send_timestep(container, new_stage_state.timestep)
+      # DISPLAY NEW EPISODE
+      await self.wait_for_start(container, new_stage_state.timestep)
+      await self.step_and_send_timestep(container, new_stage_state.timestep)
 
-      else:
-        logger.info("Loading stage state from memory")
-        # await self.load_stage(container, loaded_stage_state)
-        await self.set_user_data(stage_state=loaded_stage_state)
-        await self.step_and_send_timestep(container, loaded_stage_state.timestep)
+    else:
+      logger.info("Loading stage state from memory")
+      # await self.load_stage(container, loaded_stage_state)
+      await self.set_user_data(stage_state=loaded_stage_state)
+      await self.step_and_send_timestep(container, loaded_stage_state.timestep)
 
-      await self.set_user_data(started=True)
-      ui.run_javascript("window.accept_keys = true;")
+    await self.set_user_data(started=True)
+    ui.run_javascript("window.accept_keys = true;")
 
   def user_stats(self):
     stage_state = self.get_user_data("stage_state")
@@ -615,9 +598,13 @@ class EnvStage(Stage):
       logger.info(f"handle_key_press key: {key}")
 
     # check if valid environment interaction
-    if not key in self.key_to_action:
+    if key not in self.key_to_action:
       return
 
+    #############################
+    # get prior timestep information and save experiment data
+    # e.g. key presses
+    #############################
     # asynchonously save experiment data by putting in a save queue
     # save prior timestep + current event information
     user_stats = self.user_stats()
@@ -625,11 +612,21 @@ class EnvStage(Stage):
     await self.get_user_queue().put((event.args, timestep, user_stats))
     asyncio.create_task(self._process_save_queue())
 
-    # use action to select from avaialble next time-steps
-    action_idx = self.key_to_action[key]
-    next_timesteps = self.get_user_data("next_timesteps")
-    timestep = jax.tree_map(lambda t: t[action_idx], next_timesteps)
+    #############################
+    # automatically reset on done if flag is set
+    #############################
+    if self.autoreset_on_done and timestep.last():
+      rng = new_rng()
+      timestep = self.web_env.reset(rng, self.env_params)
+    else:
+      # use action to select from avaialble next time-steps
+      action_idx = self.key_to_action[key]
+      next_timesteps = self.get_user_data("next_timesteps")
+      timestep = jax.tree_map(lambda t: t[action_idx], next_timesteps)
 
+    #############################
+    # update stage variables
+    #############################
     episode_reset = timestep.first()
     if episode_reset:
       start_notification = self.pop_user_data("start_notification")
