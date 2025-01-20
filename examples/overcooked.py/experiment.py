@@ -224,8 +224,8 @@ class Actions(IntEnum):
 actions = [
   Actions.up,
   Actions.down,
-  Actions.left,
   Actions.right,
+  Actions.left,
   Actions.stay,
   Actions.interact,
 ]
@@ -459,6 +459,8 @@ async def env_stage_display_fn(
           stage_state, "nepisodes", lambda n: f"Try: {n}/{stage.max_episodes}"
         )
 
+    agent_color = 'blue' if app.storage.user["leader"] else 'red'
+    ui.html(f'<span style="color: {agent_color}">Agent color: {agent_color}</span>')
     # --------------------------------
     # display environment
     # --------------------------------
