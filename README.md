@@ -16,7 +16,7 @@ pip install -e .
 
 # Getting Started
 
-### Craftax
+### Example 1: Craftax
 We've provided an example of making a web app to have humans control a craftax agent in `examples/craftax`.
 
 ![Crafter Environment](https://raw.githubusercontent.com/MichaelTMatthews/Craftax/main/images/building.gif)
@@ -35,7 +35,7 @@ python web_app.py
 
 **COMING SOON**: Instructions for putting this on a remote server.
 
-### Overcooked
+### Example 2: Overcooked
 ![Overcooked Environment](https://github.com/FLAIROx/JaxMARL/blob/main/docs/imgs/cramped_room.gif?raw=true)
 
 ```bash
