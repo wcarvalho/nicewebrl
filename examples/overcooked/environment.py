@@ -371,11 +371,17 @@ async def instruction_display_fn(stage, container):
         - Press the space bar to interact with objects
         """
     )
+    agent_color = "red" if app.storage.user["leader"] else "blue"
+    ui.html(f'you will control the <span style="color: {agent_color}">{agent_color}</span> agent')
 
     room_users = get_room_users()
+    ui.markdown("="*30)
     ui.markdown(
-      "press a key when ready. when both participants press a key, advance to next stage."
+      """press a key when ready.
+      when both participants press a key, you will advance to the next stage.
+      """
     )
+    ui.markdown("Participants in room:")
     labels = {}
     for r in room_users:
       labels[str(r)] = ui.label(f"{r}")
@@ -397,18 +403,6 @@ async def instruction_display_fn(stage, container):
         # activate a function in human javascript file that will emit an
         broadcast_message("stage_over", "true")
 
-    ############################################
-    #### Create listener that updates label
-    ############################################
-    # def update_label(args):
-    #  if not args_from_room(args):
-    #    return
-    #  if not args['message'] == 'true':
-    #     return
-    #  user_id = str(args['called_by_user_id'])
-    #  labels[user_id].text = f"{user_id}: Ready"
-    # ui.on('update_label', lambda e: update_label(e.args))
-
     checked = await get_room_stage_object("checked", {r: False for r in room_users})
     stage.custom_key_press_fn = handle_key_press
     if sum(checked.values()) == 2:
@@ -416,11 +410,10 @@ async def instruction_display_fn(stage, container):
       broadcast_message("stage_over", "true")
 
 
-# for i in range(2):
-#  instruction_stage = Stage(
-#      name=f"Instuctions {i}",
-#      display_fn=instruction_display_fn)
-#  all_stages.append(instruction_stage)
+instruction_stage = Stage(
+    name="Instuctions",
+    display_fn=instruction_display_fn)
+all_stages.append(instruction_stage)
 
 
 # ------------------
@@ -459,8 +452,10 @@ async def env_stage_display_fn(
           stage_state, "nepisodes", lambda n: f"Try: {n}/{stage.max_episodes}"
         )
 
-    agent_color = "blue" if app.storage.user["leader"] else "red"
-    ui.html(f'<span style="color: {agent_color}">Agent color: {agent_color}</span>')
+    agent_color = "red" if app.storage.user["leader"] else "blue"
+    user_to_action_idx = app.storage.general["user_to_action_idx"]
+    agent_idx = int(user_to_action_idx[str(app.storage.user["seed"])]) + 1
+    ui.html(f'<span style="color: {agent_color}">Agent {agent_idx} color: {agent_color}</span>')
     # --------------------------------
     # display environment
     # --------------------------------

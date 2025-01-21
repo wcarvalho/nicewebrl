@@ -73,7 +73,7 @@ async def global_handle_key_press(e, container):
     await local_handle_key_press()
 
 
-def args_from_room(args, check_stage=True):
+def args_are_from_room(args, check_stage=True):
   """Only allow events from the same room and stage"""
   user_room = str(app.storage.user.get("room_id", None))
   if user_room != str(args["called_by_room_id"]):
@@ -89,7 +89,7 @@ def args_from_room(args, check_stage=True):
 
 async def display_stage(args, container):
   logger.info(f"Displaying stage via event: {args}")
-  if not args_from_room(args):
+  if not args_are_from_room(args):
     return
 
   if args.get("message", None) != "true":
@@ -105,7 +105,7 @@ async def display_stage(args, container):
 
 async def update_environment(args, container):
   logger.info(f"Updating environment via event: {args}")
-  if not args_from_room(args, check_stage=False):
+  if not args_are_from_room(args, check_stage=False):
     return
 
   stage_idx = app.storage.user["stage_idx"]
@@ -118,7 +118,7 @@ async def update_environment(args, container):
 
 async def finish_stage(args):
   logger.info(f"Finishing stage via event: {args}")
-  if not args_from_room(args):
+  if not args_are_from_room(args):
     return
 
   if args.get("message", None) != "true":
@@ -191,11 +191,11 @@ async def start_experiment(container):
     stage_idx = app.storage.user["stage_idx"]
     stage = experiment.all_stages[stage_idx]
 
-    print("=" * 30)
-    print(f"Began stage '{stage.name}'")
+    logger.info("=" * 30)
+    logger.info(f"Began stage '{stage.name}'")
     # activate stage
     await run_stage(stage, container)
-    print(f"Finished stage '{stage.name}'")
+    logger.info(f"Finished stage '{stage.name}'")
 
     # wait for any saves to finish before updating stage
     # very important, otherwise may lose data
@@ -232,10 +232,8 @@ async def run_stage(stage, container):
   #########
   # Create an event to signal when the stage is over
   #########
-  print("Creating stage over event")
   stage_over_event = asyncio.Event()
   asyncio.create_task(stage.set_user_data(stage_over_event=stage_over_event))
-  print("stored stage over event")
 
   ##########
   ## create functions for handling key and button presses
@@ -273,12 +271,6 @@ async def run_stage(stage, container):
     # over as soon as stage activation was complete
     logger.info(f"Finished {stage.name} immediately after activation")
     stage_over_event.set()
-
-  # if stage.next_button:
-  #  with container:
-  #    button = ui.button('Next page')
-  #    await wait_for_button_or_keypress(button)
-  #    await handle_button_press()
 
   await stage_over_event.wait()
   ui.notify("Loading next page...", type="info", position="botom")

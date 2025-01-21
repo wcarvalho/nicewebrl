@@ -162,7 +162,7 @@ class MultiHumanLeaderFollowerEnvStage(Stage):
       self.action_to_name = {k: v for k, v in enumerate(self.action_to_name)}
 
     if self.user_save_file_fn is None:
-      self.user_save_file_fn = lambda: f"data/user={app.storage.user.get('seed')}.json"
+      self.user_save_file_fn = lambda: f"data/user={app.storage.user.get('seed')}.msgpack"
 
     if self.check_finished is None:
       self.check_finished = lambda timestep: False
