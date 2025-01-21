@@ -19,7 +19,7 @@ pip install -e .
 ### Example 1: Craftax
 We've provided an example of making a web app to have humans control a craftax agent in `examples/craftax`.
 
-![Crafter Environment](https://raw.githubusercontent.com/MichaelTMatthews/Craftax/main/images/building.gif)
+<img src="https://raw.githubusercontent.com/MichaelTMatthews/Craftax/main/images/building.gif" alt="Craftax" style="width: 100%; max-width: 200px;">
 
 **(1) Install nicewebrl with examples**
 ```bash
