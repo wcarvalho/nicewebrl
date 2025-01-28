@@ -1,6 +1,7 @@
 import asyncio
 import jax
 import jax.numpy as jnp
+from typing import Optional
 from nicegui import ui, app
 
 from flax import struct
@@ -136,7 +137,7 @@ async def env_stage_display_fn(
     ui.html(make_image_html(src=state_image))
 
 
-def evaluate_success_fn(timestep: TimeStep):
+def evaluate_success_fn(timestep: TimeStep, params: Optional[struct.PyTreeNode] = None):
   """Episode finishes if person every gets 1 achievement"""
   achievements = timestep.state.achievements.astype(jnp.float32)
   success = achievements.sum() >= 1

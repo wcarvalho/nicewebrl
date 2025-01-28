@@ -1,4 +1,6 @@
 # Byte-compiled / optimized / DLL files
+*data/
+*.nicegui
 __pycache__/
 *.py[cod]
 *$py.class

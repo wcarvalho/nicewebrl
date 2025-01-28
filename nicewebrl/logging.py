@@ -71,6 +71,7 @@ class UserAwareOutput(io.TextIOBase):
     log_dir: str,
     log_filename_fn: Optional[Callable[[str, str], str]] = None,
     nicegui_storage_user_key: str = "user_id",
+    colored: bool = True,
   ):
     """
     Initialize the UserAwareOutput instance.
@@ -91,6 +92,8 @@ class UserAwareOutput(io.TextIOBase):
     self.joint_log = os.path.join(log_dir, "joint.log")
     self.buffers = {}  # Dictionary to store user-specific buffers
     self.user_to_idx = {}
+    self.user_to_color = {}  # New: store color assignments
+    self.colored = colored
     if log_filename_fn is None:
       log_filename_fn = lambda log_dir, user_id: os.path.join(
         log_dir, f"log_{user_id}.log"
@@ -187,16 +190,48 @@ class UserAwareOutput(io.TextIOBase):
       buffer.seek(0)
     return len(s)
 
+  def _get_color(self, user_id: str) -> str:
+    """
+    Assign or retrieve a color for a user.
+    """
+    if user_id not in self.user_to_color and user_id != "global":
+      # List of ANSI color codes (foreground colors)
+      colors = [
+        "\033[31m",  # red
+        "\033[32m",  # green
+        "\033[33m",  # yellow
+        "\033[34m",  # blue
+        "\033[35m",  # magenta
+        "\033[36m",  # cyan
+        "\033[91m",  # bright red
+        "\033[92m",  # bright green
+        "\033[93m",  # bright yellow
+        "\033[94m",  # bright blue
+        "\033[95m",  # bright magenta
+        "\033[96m",  # bright cyan
+      ]
+      # Assign next available color
+      color_idx = len(self.user_to_color) % len(colors)
+      self.user_to_color[user_id] = colors[color_idx]
+    return self.user_to_color.get(user_id, "")
+
   def _format_message(self, s: str, user_id: str) -> str:
     """
-    Format a message with user information if applicable.
+    Format a message with user information and color if applicable.
     """
     self._get_buffer(user_id)
     if user_id != "global" and s.strip():
       idx = self.user_to_idx[user_id]
       stage_idx = app.storage.user.get("stage_idx")
       nstages = app.storage.user.get("nstages")
-      return f"user {idx}/{self.nusers} |{user_id} |stage {stage_idx}/{nstages}| {s}"
+
+      msg = f"user {idx}/{self.nusers} |{user_id} |stage {stage_idx}/{nstages}| {s}"
+
+      if self.colored:
+        color = self._get_color(user_id)
+        reset = "\033[0m"  # Reset color
+        return f"{color}{msg}{reset}"
+      return msg
     return s
 
   def flush(self):

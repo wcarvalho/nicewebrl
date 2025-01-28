@@ -10,7 +10,7 @@ from nicewebrl.logging import setup_logging, get_logger
 from nicewebrl.utils import wait_for_button_or_keypress
 from nicewebrl import stages
 
-import experiment
+import environment as experiment
 
 DATA_DIR = "data"
 DATABASE_FILE = "db.sqlite"
