@@ -277,6 +277,7 @@ class EnvStage(Stage):
       end_on_final_timestep (bool): Whether to end the stage on the final timestep.
       user_save_file_fn (Callable[[], str]): Function that returns the path to save user data.
       verbosity (int): Level of logging verbosity (0 for minimal, higher for more).
+      precompile (bool): Whether to precompile the render_fn.
   """
 
   instruction: str = "instruction"
@@ -299,13 +300,17 @@ class EnvStage(Stage):
   user_save_file_fn: Optional[Callable[[], str]] = None
   autoreset_on_done: bool = False
   verbosity: int = 0
+  precompile: bool = True
 
   def __post_init__(self):
     super().__post_init__()
     if self.vmap_render_fn is None:
-      self.vmap_render_fn = self.web_env.precompile_vmap_render_fn(
-        self.render_fn, self.env_params
-      )
+      if self.precompile: 
+        self.vmap_render_fn = self.web_env.precompile_vmap_render_fn(
+          self.render_fn, self.env_params
+        )
+      else:
+        self.vmap_render_fn = jax.jit(jax.vmap(self.render_fn))
 
     self.key_to_action = {k: a for a, k in enumerate(self.action_keys)}
     if self.action_to_name is None:
@@ -314,7 +319,9 @@ class EnvStage(Stage):
       self.action_to_name = {k: v for k, v in enumerate(self.action_to_name)}
 
     if self.user_save_file_fn is None:
-      self.user_save_file_fn = lambda: f"data/user={app.storage.user.get('seed')}.msgpack"
+      self.user_save_file_fn = (
+        lambda: f"data/user={app.storage.user.get('seed')}.msgpack"
+      )
 
     if self.check_finished is None:
       self.check_finished = lambda timestep: False

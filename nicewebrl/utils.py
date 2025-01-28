@@ -249,4 +249,3 @@ async def read_msgpack_records(filepath: str):
 async def read_all_records(filepath: str) -> List[Dict]:
   """Helper function to read all records into a list."""
   return [record async for record in read_msgpack_records(filepath)]
-

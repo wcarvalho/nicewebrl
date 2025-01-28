@@ -372,10 +372,12 @@ async def instruction_display_fn(stage, container):
         """
     )
     agent_color = "red" if app.storage.user["leader"] else "blue"
-    ui.html(f'you will control the <span style="color: {agent_color}">{agent_color}</span> agent')
+    ui.html(
+      f'you will control the <span style="color: {agent_color}">{agent_color}</span> agent'
+    )
 
     room_users = get_room_users()
-    ui.markdown("="*30)
+    ui.markdown("=" * 30)
     ui.markdown(
       """press a key when ready.
       when both participants press a key, you will advance to the next stage.
@@ -410,9 +412,7 @@ async def instruction_display_fn(stage, container):
       broadcast_message("stage_over", "true")
 
 
-instruction_stage = Stage(
-    name="Instuctions",
-    display_fn=instruction_display_fn)
+instruction_stage = Stage(name="Instuctions", display_fn=instruction_display_fn)
 all_stages.append(instruction_stage)
 
 
@@ -455,7 +455,9 @@ async def env_stage_display_fn(
     agent_color = "red" if app.storage.user["leader"] else "blue"
     user_to_action_idx = app.storage.general["user_to_action_idx"]
     agent_idx = int(user_to_action_idx[str(app.storage.user["seed"])]) + 1
-    ui.html(f'<span style="color: {agent_color}">Agent {agent_idx} color: {agent_color}</span>')
+    ui.html(
+      f'<span style="color: {agent_color}">Agent {agent_idx} color: {agent_color}</span>'
+    )
     # --------------------------------
     # display environment
     # --------------------------------
