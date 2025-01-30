@@ -305,7 +305,7 @@ class EnvStage(Stage):
   def __post_init__(self):
     super().__post_init__()
     if self.vmap_render_fn is None:
-      if self.precompile: 
+      if self.precompile:
         self.vmap_render_fn = self.web_env.precompile_vmap_render_fn(
           self.render_fn, self.env_params
         )
@@ -386,6 +386,7 @@ class EnvStage(Stage):
     # setup code to display next state
     #############################
     rng = new_rng()
+    logger.info("Sending next steps")
     next_timesteps = self.web_env.next_steps(rng, timestep, self.env_params)
     next_images = self.vmap_render_fn(next_timesteps)
 
@@ -402,6 +403,7 @@ class EnvStage(Stage):
     #############################
     # display image
     #############################
+    logger.info("Potentially updating display")
     if update_display:
       await self.display_timestep(container, timestep)
     else:
@@ -580,12 +582,17 @@ class EnvStage(Stage):
       await self._handle_key_press(event, container)
 
   async def _handle_key_press(self, event, container):
+    key = event.args["key"]
+    logger.info(f"handle_key_press key: {key}")
     if not self.get_user_data("started", False):
+      logger.info(f"key press '{key}' before started")
       return
     if self.get_user_data("stage_finished", False):
       # if already did final save, just return
       if self.get_user_data("final_save", False):
+        logger.info(f"key press '{key}' after final save")
         return
+      logger.info(f"key press '{key}' finishing stage")
 
       # did not do final save, so do so now
       # want stage to end on keypress so that
@@ -600,12 +607,9 @@ class EnvStage(Stage):
         success_notification.dismiss()
       return
 
-    key = event.args["key"]
-    if self.verbosity:
-      logger.info(f"handle_key_press key: {key}")
-
     # check if valid environment interaction
     if key not in self.key_to_action:
+      logger.info(f"key press '{key}' not in key_to_action")
       return
 
     #############################
@@ -622,9 +626,16 @@ class EnvStage(Stage):
     #############################
     # automatically reset on done if flag is set
     #############################
-    if self.autoreset_on_done and timestep.last():
-      rng = new_rng()
-      timestep = self.web_env.reset(rng, self.env_params)
+    if self.autoreset_on_done:
+      if timestep.last():
+        rng = new_rng()
+        logger.info("Resetting environment")
+        timestep = self.web_env.reset(rng, self.env_params)
+        logger.info("finished resetting environment")
+      else:
+        action_idx = self.key_to_action[key]
+        next_timesteps = self.get_user_data("next_timesteps")
+        timestep = jax.tree_map(lambda t: t[action_idx], next_timesteps)
     else:
       # use action to select from avaialble next time-steps
       action_idx = self.key_to_action[key]
@@ -689,20 +700,28 @@ class EnvStage(Stage):
         logger.info("-" * 20)
 
       start_notification = None
-      if not stage_finished:
-        start_notification = ui.notification(
-          "press any arrow key to start next episode",
-          position="center",
-          type="info",
-          timeout=self.msg_display_time,
-        )
-      else:
+      ################
+      # stage finished?
+      ################
+      if stage_finished:
+        if self.verbosity:
+          logger.info("stage finished")
         start_notification = ui.notification(
           "press any arrow key to continue",
           position="center",
           type="info",
           timeout=self.msg_display_time,
         )
+      else:
+        start_notification = ui.notification(
+          "press any arrow key to start next episode",
+          position="center",
+          type="info",
+          timeout=self.msg_display_time,
+        )
+      ################
+      # Notify
+      ################
       success_notification = None
       if self.notify_success:
         if success:

@@ -56,6 +56,7 @@ document.addEventListener('DOMContentLoaded', async function () {
     if (window.next_states !== null && window.accept_keys && event.key in window.next_states) {
       if (!window.require_fullscreen || await isFullscreen() ) {
         next_state = window.next_states[event.key];
+        window.next_states = null;
         var imgElement = document.getElementById('stateImage');
         if (imgElement !== null) {
           imgElement.src = next_state;

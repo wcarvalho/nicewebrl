@@ -232,7 +232,7 @@ class TimestepWrapper(object):
     env,
     autoreset: bool = True,
     use_params: bool = True,
-    num_leading_dims: int = 1,
+    num_leading_dims: int = 0,
   ):
     self._env = env
     self._autoreset = autoreset
@@ -252,7 +252,7 @@ class TimestepWrapper(object):
       obs, state = self._env.reset(key)
     # Get shape from first leaf of obs, assuming it's a batch dimension
     first_leaf = jax.tree_util.tree_leaves(obs)[0]
-    shape = first_leaf.shape[self._num_leading_dims :]
+    shape = first_leaf.shape[: self._num_leading_dims]
     timestep = TimeStep(
       state=state,
       observation=obs,
@@ -344,15 +344,17 @@ class JaxWebEnv:
 
   def precompile(self, dummy_env_params: Optional[struct.PyTreeNode] = None) -> None:
     """Call this function to pre-compile jax functions before experiment starts."""
-    print("Compiling jax environment functions.")
+    print("Compiling environment reset and step functions.")
     start = time.time()
     dummy_rng = jax.random.PRNGKey(0)
     self.reset = self.reset.lower(dummy_rng, dummy_env_params).compile()
+    print(f"\treset time: {time.time() - start}")
+    start = time.time()
     timestep = self.reset(dummy_rng, dummy_env_params)
     self.next_steps = self.next_steps.lower(
       dummy_rng, timestep, dummy_env_params
     ).compile()
-    print(f"\ttime: {time.time() - start}")
+    print(f"\tstep time: {time.time() - start}")
 
   def precompile_vmap_render_fn(
     self, render_fn: RenderFn, dummy_env_params: struct.PyTreeNode
