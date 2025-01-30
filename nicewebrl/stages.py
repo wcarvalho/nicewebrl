@@ -386,7 +386,6 @@ class EnvStage(Stage):
     # setup code to display next state
     #############################
     rng = new_rng()
-    logger.info("Sending next steps")
     next_timesteps = self.web_env.next_steps(rng, timestep, self.env_params)
     next_images = self.vmap_render_fn(next_timesteps)
 
@@ -403,7 +402,6 @@ class EnvStage(Stage):
     #############################
     # display image
     #############################
-    logger.info("Potentially updating display")
     if update_display:
       await self.display_timestep(container, timestep)
     else:
