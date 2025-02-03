@@ -282,7 +282,7 @@ class TimestepWrapper(object):
       return TimeStep(
         state=state,
         observation=obs,
-        discount=1.0 - done.astype(jnp.float32),
+        discount=1.0 - jnp.asarray(done).astype(jnp.float32),
         reward=reward,
         step_type=jnp.where(done, StepType.LAST, StepType.MID),
       )

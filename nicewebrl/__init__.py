@@ -26,6 +26,7 @@ from nicewebrl.nicejax import TimestepWrapper
 from nicewebrl.nicejax import JaxWebEnv
 
 from nicewebrl.stages import EnvStageState
+from nicewebrl.stages import StageStateModel
 from nicewebrl.stages import Stage
 from nicewebrl.stages import FeedbackStage
 from nicewebrl.stages import EnvStage

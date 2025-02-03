@@ -1,4 +1,5 @@
 from typing import List, Any, Callable, Dict, Optional, Union
+from functools import partial
 
 import asyncio
 from asyncio import Lock
@@ -50,7 +51,8 @@ def time_diff(t1, t2) -> float:
 
 class StageStateModel(models.Model):
   id = fields.IntField(primary_key=True)
-  session_id = fields.CharField(max_length=255, index=True)  # Added max_length
+  name = fields.CharField(max_length=255, index=True)
+  session_id = fields.CharField(max_length=255, index=True)
   stage_idx = fields.IntField(index=True)
   data = fields.BinaryField()
 
@@ -143,6 +145,7 @@ async def save_stage_state(
   model = StageStateModel(
     session_id=app.storage.browser["id"],
     stage_idx=app.storage.user["stage_idx"],
+    name=stage_state.name,
     data=serialization.to_bytes(stage_state),
   )
   await safe_save(
@@ -159,11 +162,13 @@ class EnvStageState(struct.PyTreeNode):
   nsteps: jax.Array = jnp.array(1, dtype=jnp.int32)
   nepisodes: jax.Array = jnp.array(1, dtype=jnp.int32)
   nsuccesses: jax.Array = jnp.array(0, dtype=jnp.int32)
+  name: str = "stage"
 
 
 @dataclasses.dataclass
 class Stage:
   name: str = "stage"
+  title: str = "stage"
   body: str = "text"
   metadata: Dict[str, Any] = dataclasses.field(default_factory=dict)
   display_fn: DisplayFn = None
@@ -327,7 +332,7 @@ class EnvStage(Stage):
       self.check_finished = lambda timestep: False
 
     if self.state_cls is None:
-      self.state_cls = EnvStageState
+      self.state_cls = partial(EnvStageState, name=self.name)
 
     self._user_queues = {}  # new: dictionary to store per-user queues
 
