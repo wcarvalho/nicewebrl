@@ -12,6 +12,7 @@ from nicewebrl.utils import initialize_user
 from nicewebrl.utils import get_user_session_minutes
 from nicewebrl.utils import broadcast_message
 from nicewebrl.utils import read_msgpack_records
+from nicewebrl.utils import write_msgpack_record
 from nicewebrl.utils import read_all_records
 
 from nicewebrl.nicejax import get_rng

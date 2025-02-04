@@ -383,14 +383,13 @@ class EnvStage(Stage):
           ui.notify("Please refresh the page", type="negative")
           return
 
-  async def step_and_send_timestep(
-    self, container, timestep, update_display: bool = True
-  ):
+  async def step_and_send_timestep(self, container, update_display: bool = True):
     #############################
     # get next images and store them client-side
     # setup code to display next state
     #############################
     rng = new_rng()
+    timestep = self.get_user_data("stage_state").timestep
     next_timesteps = self.web_env.next_steps(rng, timestep, self.env_params)
     next_images = self.vmap_render_fn(next_timesteps)
 
@@ -415,20 +414,16 @@ class EnvStage(Stage):
   async def wait_for_start(
     self,
     container: ui.element,
-    timestep: struct.PyTreeNode,
   ):
     ui.run_javascript("window.accept_keys = false;")
     if self.reset_display_fn is not None:
-      await self.reset_display_fn(stage=self, container=container, timestep=timestep)
+      await self.reset_display_fn(
+        stage=self,
+        container=container,
+        timestep=self.get_user_data("stage_state").timestep,
+      )
 
     ui.run_javascript("window.accept_keys = true;")
-
-  async def reset_stage(self) -> EnvStageState:
-    rng = new_rng()
-
-    # NEW EPISODE
-    timestep = self.web_env.reset(rng, self.env_params)
-    return self.state_cls(timestep=timestep)
 
   async def activate(self, container: ui.element):
     """
@@ -458,14 +453,14 @@ class EnvStage(Stage):
       asyncio.create_task(save_stage_state(new_stage_state))
 
       # DISPLAY NEW EPISODE
-      await self.wait_for_start(container, new_stage_state.timestep)
-      await self.step_and_send_timestep(container, new_stage_state.timestep)
+      await self.wait_for_start(container)
+      await self.step_and_send_timestep(container)
 
     else:
       logger.info("Loading stage state from memory")
       # await self.load_stage(container, loaded_stage_state)
       await self.set_user_data(stage_state=loaded_stage_state)
-      await self.step_and_send_timestep(container, loaded_stage_state.timestep)
+      await self.step_and_send_timestep(container)
 
     await self.set_user_data(started=True)
     ui.run_javascript("window.accept_keys = true;")
@@ -685,10 +680,9 @@ class EnvStage(Stage):
     # Display new data?
     ################
     if episode_reset:
-      await self.wait_for_start(container, timestep)
+      await self.wait_for_start(container)
     await self.step_and_send_timestep(
       container,
-      timestep,
       # image is normally updated client-side
       # when episode resets, update server-side
       update_display=episode_reset,
