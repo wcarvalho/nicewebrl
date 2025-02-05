@@ -18,5 +18,6 @@ pip install "git+https://github.com/wcarvalho/nicewebrl.git#egg=nicewebrl[crafta
 pip install -e ".[craftax]"
 
 # Run the web app
+cd examples/crafter
 python web_app.py
 ``` 

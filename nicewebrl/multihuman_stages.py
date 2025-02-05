@@ -1,4 +1,5 @@
-from typing import List, Any, Callable, Dict, Optional, Union
+from typing import List, Callable, Dict, Optional
+from functools import partial
 import itertools
 import asyncio
 from asyncio import Lock
@@ -15,7 +16,7 @@ import jax
 import jax.numpy as jnp
 
 from nicegui import app, ui, Client
-from nicewebrl import nicejax, clear_element
+from nicewebrl import nicejax
 from nicewebrl.nicejax import new_rng, base64_npimage, make_serializable, TimeStep
 from nicewebrl.logging import get_logger
 from nicewebrl.utils import retry_with_exponential_backoff
@@ -24,7 +25,6 @@ from nicewebrl.utils import retry_with_exponential_backoff
 from nicewebrl import Stage, EnvStageState
 from nicewebrl.stages import safe_save, time_diff, StageStateModel
 from nicewebrl import broadcast_message
-import msgpack
 from nicewebrl.utils import write_msgpack_record
 
 FeedbackFn = Callable[[struct.PyTreeNode], Dict]
@@ -56,7 +56,7 @@ def send_clients_environment_action(env_key: str):
       ui.run_javascript(fn)
 
 
-async def get_latest_stage_state(example: struct.PyTreeNode) -> StageStateModel | None:
+async def get_latest_stage_state(example: struct.PyTreeNode, name: str) -> StageStateModel | None:
   """
 
   # NOTE: only change is to use room_id instead of browser_id
@@ -87,6 +87,7 @@ async def save_stage_state(
   model = StageStateModel(
     session_id=app.storage.user["room_id"],
     stage_idx=app.storage.user["stage_idx"],
+    name=stage_state.name,
     data=serialization.to_bytes(stage_state),
   )
   await safe_save(
@@ -170,7 +171,7 @@ class MultiHumanLeaderFollowerEnvStage(Stage):
       self.check_finished = lambda timestep: False
 
     if self.state_cls is None:
-      self.state_cls = EnvStageState
+      self.state_cls = partial(EnvStageState, name=self.name)
 
     self._user_queues = {}  # new: dictionary to store per-user queues
     self.room_data = {}
@@ -360,7 +361,10 @@ class MultiHumanLeaderFollowerEnvStage(Stage):
         new_stage_state = self.state_cls(timestep=timestep)
 
         # (potentially) load stage state from memory
-        loaded_stage_state = await get_latest_stage_state(example=new_stage_state)
+        loaded_stage_state = await get_latest_stage_state(
+          example=new_stage_state,
+          name=self.name,
+        )
         if loaded_stage_state is None:
           logger.info("No stage state found, starting new stage")
 

@@ -38,8 +38,8 @@ craftax = [
 jaxmarl = [
     "jaxmarl @ git+https://github.com/FLAIROx/JaxMARL.git",
     "python-dotenv",
-    "jax>=0.4.23",
-    "jaxlib>=0.4.23",
+    "jax>=0.4.23,<=0.4.38",
+    "jaxlib>=0.4.23,<=0.4.38",
 ]
 
 [project.urls]

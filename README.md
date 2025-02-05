@@ -24,6 +24,8 @@ We've provided an example of making a web app to have humans control a craftax a
 **(1) Install nicewebrl with examples**
 ```bash
 pip install "git+https://github.com/wcarvalho/nicewebrl.git#egg=nicewebrl[craftax]"
+# or 
+pip install -e ".[craftax]"
 ```
 
 **(2) run the web app from the directory**
@@ -38,8 +40,12 @@ python web_app.py
 ### Example 2: Overcooked
 ![Overcooked Environment](https://github.com/FLAIROx/JaxMARL/blob/main/docs/imgs/cramped_room.gif?raw=true)
 
+**Make sure you have CMake installed**
 ```bash
 pip install "git+https://github.com/wcarvalho/nicewebrl.git#egg=nicewebrl[jaxmarl]"
+# or 
+pip install -e ".[jaxmarl]"
+
 cd examples/overcooked
 python web_app.py
 ```
