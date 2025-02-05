@@ -460,6 +460,7 @@ class EnvStage(Stage):
       logger.info("Loading stage state from memory")
       # await self.load_stage(container, loaded_stage_state)
       await self.set_user_data(stage_state=loaded_stage_state)
+      await self.wait_for_start(container)
       await self.step_and_send_timestep(container)
 
     await self.set_user_data(started=True)
