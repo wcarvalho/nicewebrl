@@ -1,14 +1,12 @@
-import asyncio
 import jax
 import jax.numpy as jnp
 from typing import Optional
-from nicegui import ui, app
+from nicegui import ui
 
 from flax import struct
 from craftax.craftax.renderer import render_craftax_pixels
 from craftax.craftax_env import make_craftax_env_from_name
 from craftax.craftax.constants import Action, BLOCK_PIXEL_SIZE_HUMAN
-from craftax.craftax import craftax_state
 
 
 import nicewebrl
@@ -138,9 +136,9 @@ async def env_stage_display_fn(
 
 
 def evaluate_success_fn(timestep: TimeStep, params: Optional[struct.PyTreeNode] = None):
-  """Episode finishes if person every gets 1 achievement"""
+  """Episode finishes if person gets 5 achievements"""
   achievements = timestep.state.achievements.astype(jnp.float32)
-  success = achievements.sum() >= 1
+  success = achievements.sum() >= 5
   return success
 
 

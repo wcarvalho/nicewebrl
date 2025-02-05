@@ -59,26 +59,19 @@ class StageStateModel(models.Model):
   class Meta:
     table = "stage"
 
+class EnvStageState(struct.PyTreeNode):
+  timestep: struct.PyTreeNode
+  nsteps: jax.Array = jnp.array(1, dtype=jnp.int32)
+  nepisodes: jax.Array = jnp.array(1, dtype=jnp.int32)
+  nsuccesses: jax.Array = jnp.array(0, dtype=jnp.int32)
+  name: str = "stage"
 
-class ExperimentData(models.Model):
-  id = fields.IntField(primary_key=True)
-  session_id = fields.CharField(max_length=255, index=True)
-  name = fields.TextField()
-  body = fields.TextField()
-  stage_idx = fields.IntField(index=True)
-  data = fields.JSONField(default=dict)
-  user_data = fields.JSONField(default=dict, blank=True)
-  metadata = fields.JSONField(default=dict, blank=True)
-
-  class Meta:
-    table = "experiment"
-
-
-async def get_latest_stage_state(example: struct.PyTreeNode) -> StageStateModel | None:
+async def get_latest_stage_state(example: struct.PyTreeNode, name: str) -> StageStateModel | None:
   logger.info("Getting latest stage state")
   latest = (
     await StageStateModel.filter(
       session_id=app.storage.browser["id"],
+      name=name,
       stage_idx=app.storage.user["stage_idx"],
     )
     .order_by("-id")
@@ -156,13 +149,6 @@ async def save_stage_state(
     synchronous=True,
   )
 
-
-class EnvStageState(struct.PyTreeNode):
-  timestep: struct.PyTreeNode
-  nsteps: jax.Array = jnp.array(1, dtype=jnp.int32)
-  nepisodes: jax.Array = jnp.array(1, dtype=jnp.int32)
-  nsuccesses: jax.Array = jnp.array(0, dtype=jnp.int32)
-  name: str = "stage"
 
 
 @dataclasses.dataclass
@@ -444,7 +430,10 @@ class EnvStage(Stage):
     new_stage_state = self.state_cls(timestep=timestep)
 
     # (potentially) load stage state from memory
-    loaded_stage_state = await get_latest_stage_state(example=new_stage_state)
+    loaded_stage_state = await get_latest_stage_state(
+      example=new_stage_state,
+      name=self.name,
+      )
 
     if loaded_stage_state is None:
       logger.info("No stage state found, starting new stage")

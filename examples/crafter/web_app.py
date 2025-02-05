@@ -10,7 +10,7 @@ from nicewebrl.logging import setup_logging, get_logger
 from nicewebrl.utils import wait_for_button_or_keypress
 from nicewebrl import stages
 
-import environment as experiment
+import experiment_structure as experiment
 
 DATA_DIR = "data"
 DATABASE_FILE = "db.sqlite"
@@ -205,7 +205,6 @@ async def run_stage(stage, container):
       await handle_button_press()
 
   await stage_over_event.wait()
-  ui.notify("Loading next page...", type="info", position="center")
 
 
 #####################################
