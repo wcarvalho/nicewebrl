@@ -1,4 +1,5 @@
 from typing import List, Any, Callable, Dict, Optional, Union
+from functools import partial
 
 import asyncio
 from asyncio import Lock
@@ -50,33 +51,27 @@ def time_diff(t1, t2) -> float:
 
 class StageStateModel(models.Model):
   id = fields.IntField(primary_key=True)
-  session_id = fields.CharField(max_length=255, index=True)  # Added max_length
+  name = fields.CharField(max_length=255, index=True)
+  session_id = fields.CharField(max_length=255, index=True)
   stage_idx = fields.IntField(index=True)
   data = fields.BinaryField()
 
   class Meta:
     table = "stage"
 
+class EnvStageState(struct.PyTreeNode):
+  timestep: struct.PyTreeNode
+  nsteps: jax.Array = jnp.array(1, dtype=jnp.int32)
+  nepisodes: jax.Array = jnp.array(1, dtype=jnp.int32)
+  nsuccesses: jax.Array = jnp.array(0, dtype=jnp.int32)
+  name: str = "stage"
 
-class ExperimentData(models.Model):
-  id = fields.IntField(primary_key=True)
-  session_id = fields.CharField(max_length=255, index=True)
-  name = fields.TextField()
-  body = fields.TextField()
-  stage_idx = fields.IntField(index=True)
-  data = fields.JSONField(default=dict)
-  user_data = fields.JSONField(default=dict, blank=True)
-  metadata = fields.JSONField(default=dict, blank=True)
-
-  class Meta:
-    table = "experiment"
-
-
-async def get_latest_stage_state(example: struct.PyTreeNode) -> StageStateModel | None:
+async def get_latest_stage_state(example: struct.PyTreeNode, name: str) -> StageStateModel | None:
   logger.info("Getting latest stage state")
   latest = (
     await StageStateModel.filter(
       session_id=app.storage.browser["id"],
+      name=name,
       stage_idx=app.storage.user["stage_idx"],
     )
     .order_by("-id")
@@ -143,6 +138,7 @@ async def save_stage_state(
   model = StageStateModel(
     session_id=app.storage.browser["id"],
     stage_idx=app.storage.user["stage_idx"],
+    name=stage_state.name,
     data=serialization.to_bytes(stage_state),
   )
   await safe_save(
@@ -154,16 +150,11 @@ async def save_stage_state(
   )
 
 
-class EnvStageState(struct.PyTreeNode):
-  timestep: struct.PyTreeNode
-  nsteps: jax.Array = jnp.array(1, dtype=jnp.int32)
-  nepisodes: jax.Array = jnp.array(1, dtype=jnp.int32)
-  nsuccesses: jax.Array = jnp.array(0, dtype=jnp.int32)
-
 
 @dataclasses.dataclass
 class Stage:
   name: str = "stage"
+  title: str = "stage"
   body: str = "text"
   metadata: Dict[str, Any] = dataclasses.field(default_factory=dict)
   display_fn: DisplayFn = None
@@ -305,7 +296,7 @@ class EnvStage(Stage):
   def __post_init__(self):
     super().__post_init__()
     if self.vmap_render_fn is None:
-      if self.precompile: 
+      if self.precompile:
         self.vmap_render_fn = self.web_env.precompile_vmap_render_fn(
           self.render_fn, self.env_params
         )
@@ -327,7 +318,7 @@ class EnvStage(Stage):
       self.check_finished = lambda timestep: False
 
     if self.state_cls is None:
-      self.state_cls = EnvStageState
+      self.state_cls = partial(EnvStageState, name=self.name)
 
     self._user_queues = {}  # new: dictionary to store per-user queues
 
@@ -378,14 +369,13 @@ class EnvStage(Stage):
           ui.notify("Please refresh the page", type="negative")
           return
 
-  async def step_and_send_timestep(
-    self, container, timestep, update_display: bool = True
-  ):
+  async def step_and_send_timestep(self, container, update_display: bool = True):
     #############################
     # get next images and store them client-side
     # setup code to display next state
     #############################
     rng = new_rng()
+    timestep = self.get_user_data("stage_state").timestep
     next_timesteps = self.web_env.next_steps(rng, timestep, self.env_params)
     next_images = self.vmap_render_fn(next_timesteps)
 
@@ -410,20 +400,16 @@ class EnvStage(Stage):
   async def wait_for_start(
     self,
     container: ui.element,
-    timestep: struct.PyTreeNode,
   ):
     ui.run_javascript("window.accept_keys = false;")
     if self.reset_display_fn is not None:
-      await self.reset_display_fn(stage=self, container=container, timestep=timestep)
+      await self.reset_display_fn(
+        stage=self,
+        container=container,
+        timestep=self.get_user_data("stage_state").timestep,
+      )
 
     ui.run_javascript("window.accept_keys = true;")
-
-  async def reset_stage(self) -> EnvStageState:
-    rng = new_rng()
-
-    # NEW EPISODE
-    timestep = self.web_env.reset(rng, self.env_params)
-    return self.state_cls(timestep=timestep)
 
   async def activate(self, container: ui.element):
     """
@@ -444,7 +430,10 @@ class EnvStage(Stage):
     new_stage_state = self.state_cls(timestep=timestep)
 
     # (potentially) load stage state from memory
-    loaded_stage_state = await get_latest_stage_state(example=new_stage_state)
+    loaded_stage_state = await get_latest_stage_state(
+      example=new_stage_state,
+      name=self.name,
+      )
 
     if loaded_stage_state is None:
       logger.info("No stage state found, starting new stage")
@@ -453,14 +442,15 @@ class EnvStage(Stage):
       asyncio.create_task(save_stage_state(new_stage_state))
 
       # DISPLAY NEW EPISODE
-      await self.wait_for_start(container, new_stage_state.timestep)
-      await self.step_and_send_timestep(container, new_stage_state.timestep)
+      await self.wait_for_start(container)
+      await self.step_and_send_timestep(container)
 
     else:
       logger.info("Loading stage state from memory")
       # await self.load_stage(container, loaded_stage_state)
       await self.set_user_data(stage_state=loaded_stage_state)
-      await self.step_and_send_timestep(container, loaded_stage_state.timestep)
+      await self.wait_for_start(container)
+      await self.step_and_send_timestep(container)
 
     await self.set_user_data(started=True)
     ui.run_javascript("window.accept_keys = true;")
@@ -580,12 +570,17 @@ class EnvStage(Stage):
       await self._handle_key_press(event, container)
 
   async def _handle_key_press(self, event, container):
+    key = event.args["key"]
+    logger.info(f"handle_key_press key: {key}")
     if not self.get_user_data("started", False):
+      logger.info(f"key press '{key}' before started")
       return
     if self.get_user_data("stage_finished", False):
       # if already did final save, just return
       if self.get_user_data("final_save", False):
+        logger.info(f"key press '{key}' after final save")
         return
+      logger.info(f"key press '{key}' finishing stage")
 
       # did not do final save, so do so now
       # want stage to end on keypress so that
@@ -600,12 +595,9 @@ class EnvStage(Stage):
         success_notification.dismiss()
       return
 
-    key = event.args["key"]
-    if self.verbosity:
-      logger.info(f"handle_key_press key: {key}")
-
     # check if valid environment interaction
     if key not in self.key_to_action:
+      logger.info(f"key press '{key}' not in key_to_action")
       return
 
     #############################
@@ -622,9 +614,16 @@ class EnvStage(Stage):
     #############################
     # automatically reset on done if flag is set
     #############################
-    if self.autoreset_on_done and timestep.last():
-      rng = new_rng()
-      timestep = self.web_env.reset(rng, self.env_params)
+    if self.autoreset_on_done:
+      if timestep.last():
+        rng = new_rng()
+        logger.info("Resetting environment")
+        timestep = self.web_env.reset(rng, self.env_params)
+        logger.info("finished resetting environment")
+      else:
+        action_idx = self.key_to_action[key]
+        next_timesteps = self.get_user_data("next_timesteps")
+        timestep = jax.tree_map(lambda t: t[action_idx], next_timesteps)
     else:
       # use action to select from avaialble next time-steps
       action_idx = self.key_to_action[key]
@@ -671,10 +670,9 @@ class EnvStage(Stage):
     # Display new data?
     ################
     if episode_reset:
-      await self.wait_for_start(container, timestep)
+      await self.wait_for_start(container)
     await self.step_and_send_timestep(
       container,
-      timestep,
       # image is normally updated client-side
       # when episode resets, update server-side
       update_display=episode_reset,
@@ -689,20 +687,28 @@ class EnvStage(Stage):
         logger.info("-" * 20)
 
       start_notification = None
-      if not stage_finished:
-        start_notification = ui.notification(
-          "press any arrow key to start next episode",
-          position="center",
-          type="info",
-          timeout=self.msg_display_time,
-        )
-      else:
+      ################
+      # stage finished?
+      ################
+      if stage_finished:
+        if self.verbosity:
+          logger.info("stage finished")
         start_notification = ui.notification(
           "press any arrow key to continue",
           position="center",
           type="info",
           timeout=self.msg_display_time,
         )
+      else:
+        start_notification = ui.notification(
+          "press any arrow key to start next episode",
+          position="center",
+          type="info",
+          timeout=self.msg_display_time,
+        )
+      ################
+      # Notify
+      ################
       success_notification = None
       if self.notify_success:
         if success:

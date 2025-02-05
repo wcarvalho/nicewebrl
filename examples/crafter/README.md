@@ -14,7 +14,10 @@ This example demonstrates how to create a web interface for the [Craftax environ
 ```bash
 # Install dependencies
 pip install "git+https://github.com/wcarvalho/nicewebrl.git#egg=nicewebrl[craftax]"
+# or 
+pip install -e ".[craftax]"
 
 # Run the web app
+cd examples/crafter
 python web_app.py
 ``` 
