@@ -340,12 +340,11 @@ class EnvStage(Stage):
     """Process all items currently in the queue for current user"""
     queue = self.get_user_queue()
     while not queue.empty():
-      args, timestep, user_stats, container = await queue.get()
+      args, timestep, user_stats = await queue.get()
       await self.save_experiment_data(
         args,
         timestep=timestep,
         user_stats=user_stats,
-        container=container,
       )
       queue.task_done()
 
@@ -469,7 +468,7 @@ class EnvStage(Stage):
       nsuccesses=int(stage_state.nsuccesses),
     )
 
-  async def save_experiment_data(self, args, timestep, user_stats, container):
+  async def save_experiment_data(self, args, timestep, user_stats):
     key = args["key"]
     keydownTime = args.get("keydownTime")
     imageSeenTime = args.get("imageSeenTime")
@@ -530,17 +529,13 @@ class EnvStage(Stage):
           logger.error(f"{name} saved file")
           logger.error(f"stage state: {self.user_stats()}")
           logger.error(f"imageSeenTime={imageSeenTime}, keydownTime={keydownTime}")
-          try:
-            with container:
-              ui.notification("Error: Stage unexpectedly ending early", type="negative")
-          except Exception:
-            pass
           await self.set_user_data(finished=True, final_save=True)
+          logger.info("Stage finished")
 
     await self.set_user_data(saved_data=True)
 
   @retry_with_exponential_backoff(max_retries=5, base_delay=1, max_delay=10)
-  async def finish_stage(self, container: ui.element):
+  async def finish_stage(self):
     if not self.get_user_data("started", False):
       return
     if self.get_user_data("finished", False):
@@ -571,7 +566,6 @@ class EnvStage(Stage):
       ),
       timestep=stage_state.timestep,
       user_stats=self.user_stats(),
-      container=container,
     )
 
   async def handle_key_press(self, event, container):
@@ -595,7 +589,7 @@ class EnvStage(Stage):
       # did not do final save, so do so now
       # want stage to end on keypress so that
       # notifications are visible at final timestep
-      await self.finish_stage(container)
+      await self.finish_stage()
       # and dismiss any present notifications
       start_notification = self.pop_user_data("start_notification")
       if start_notification:
@@ -618,7 +612,7 @@ class EnvStage(Stage):
     # save prior timestep + current event information
     user_stats = self.user_stats()
     timestep = self.get_user_data("stage_state").timestep
-    await self.get_user_queue().put((event.args, timestep, user_stats, container))
+    await self.get_user_queue().put((event.args, timestep, user_stats))
     asyncio.create_task(self._process_save_queue())
 
     #############################
