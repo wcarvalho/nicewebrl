@@ -35,6 +35,7 @@ from nicewebrl.stages import Block
 from nicewebrl.stages import prepare_blocks
 from nicewebrl.stages import generate_stage_order
 from nicewebrl.stages import time_diff
+from nicewebrl.stages import broadcast_metadata
 
 
 from nicewebrl.logging import get_logger

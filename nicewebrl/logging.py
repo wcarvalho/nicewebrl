@@ -341,6 +341,7 @@ def setup_logging(
   watchfiles_logging: bool = False,
   log_filename_fn: Optional[Callable[[str, str], str]] = None,
   ignored_watchfiles_dirs: tuple = ("data/", ".nicegui/"),
+  display_time: bool = True,
 ):
   """
   Set up logging configuration.
@@ -387,9 +388,9 @@ def setup_logging(
   stdout_handler = UserAwareHandler(user_aware_stdout)
 
   # Set formatting for the handlers
+  format = "%(name)s - %(levelname)s - %(message)s"
   formatter = logging.Formatter(
-    "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    # datefmt='%Y/%m/%d %H:%M:%S'
+    format if not display_time else f"%(asctime)s - {format}",
   )
   stdout_handler.setFormatter(formatter)
   root_logger.addHandler(stdout_handler)

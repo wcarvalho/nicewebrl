@@ -1,6 +1,6 @@
 from typing import List, Any, Callable, Dict, Optional, Union
 from functools import partial
-
+import uuid
 import asyncio
 from asyncio import Lock
 import aiofiles
@@ -59,6 +59,7 @@ class StageStateModel(models.Model):
   class Meta:
     table = "stage"
 
+
 class EnvStageState(struct.PyTreeNode):
   timestep: struct.PyTreeNode
   nsteps: jax.Array = jnp.array(1, dtype=jnp.int32)
@@ -66,7 +67,10 @@ class EnvStageState(struct.PyTreeNode):
   nsuccesses: jax.Array = jnp.array(0, dtype=jnp.int32)
   name: str = "stage"
 
-async def get_latest_stage_state(example: struct.PyTreeNode, name: str) -> StageStateModel | None:
+
+async def get_latest_stage_state(
+  example: struct.PyTreeNode, name: str
+) -> StageStateModel | None:
   logger.info("Getting latest stage state")
   latest = (
     await StageStateModel.filter(
@@ -148,7 +152,6 @@ async def save_stage_state(
     max_delay=max_delay,
     synchronous=True,
   )
-
 
 
 @dataclasses.dataclass
@@ -290,6 +293,7 @@ class EnvStage(Stage):
   msg_display_time: int = None
   user_save_file_fn: Optional[Callable[[], str]] = None
   autoreset_on_done: bool = False
+  ignore_missing_data: bool = True
   verbosity: int = 0
   precompile: bool = True
 
@@ -336,11 +340,12 @@ class EnvStage(Stage):
     """Process all items currently in the queue for current user"""
     queue = self.get_user_queue()
     while not queue.empty():
-      args, timestep, user_stats = await queue.get()
+      args, timestep, user_stats, container = await queue.get()
       await self.save_experiment_data(
         args,
         timestep=timestep,
         user_stats=user_stats,
+        container=container,
       )
       queue.task_done()
 
@@ -356,7 +361,7 @@ class EnvStage(Stage):
       attempt += 1
       try:
         # Set the timestamp in the browser
-        await ui.run_javascript("window.imageSeenTime = new Date();", timeout=2)
+        await ui.run_javascript("window.imageSeenTime = new Date();", timeout=10)
         # If successful, we can return immediately
         return
       except Exception as e:
@@ -366,7 +371,8 @@ class EnvStage(Stage):
           )
         await asyncio.sleep(0.1)  # Short delay between attempts
         if attempt > 100:
-          ui.notify("Please refresh the page", type="negative")
+          with container:
+            ui.notify("Please refresh the page", type="negative")
           return
 
   async def step_and_send_timestep(self, container, update_display: bool = True):
@@ -433,7 +439,7 @@ class EnvStage(Stage):
     loaded_stage_state = await get_latest_stage_state(
       example=new_stage_state,
       name=self.name,
-      )
+    )
 
     if loaded_stage_state is None:
       logger.info("No stage state found, starting new stage")
@@ -447,9 +453,7 @@ class EnvStage(Stage):
 
     else:
       logger.info("Loading stage state from memory")
-      # await self.load_stage(container, loaded_stage_state)
       await self.set_user_data(stage_state=loaded_stage_state)
-      await self.wait_for_start(container)
       await self.step_and_send_timestep(container)
 
     await self.set_user_data(started=True)
@@ -465,7 +469,7 @@ class EnvStage(Stage):
       nsuccesses=int(stage_state.nsuccesses),
     )
 
-  async def save_experiment_data(self, args, timestep, user_stats):
+  async def save_experiment_data(self, args, timestep, user_stats, container):
     key = args["key"]
     keydownTime = args.get("keydownTime")
     imageSeenTime = args.get("imageSeenTime")
@@ -522,16 +526,21 @@ class EnvStage(Stage):
           logger.info(f"env step: {stage_state.nsteps}")
 
       else:
-        logger.error(f"{name} saved file")
-        logger.error(f"stage state: {self.user_stats()}")
-        logger.error(f"imageSeenTime={imageSeenTime}, keydownTime={keydownTime}")
-        ui.notification("Error: Stage unexpectedly ending early", type="negative")
-        await self.set_user_data(finished=True, final_save=True)
+        if not self.ignore_missing_data:
+          logger.error(f"{name} saved file")
+          logger.error(f"stage state: {self.user_stats()}")
+          logger.error(f"imageSeenTime={imageSeenTime}, keydownTime={keydownTime}")
+          try:
+            with container:
+              ui.notification("Error: Stage unexpectedly ending early", type="negative")
+          except Exception:
+            pass
+          await self.set_user_data(finished=True, final_save=True)
 
     await self.set_user_data(saved_data=True)
 
   @retry_with_exponential_backoff(max_retries=5, base_delay=1, max_delay=10)
-  async def finish_stage(self):
+  async def finish_stage(self, container: ui.element):
     if not self.get_user_data("started", False):
       return
     if self.get_user_data("finished", False):
@@ -562,6 +571,7 @@ class EnvStage(Stage):
       ),
       timestep=stage_state.timestep,
       user_stats=self.user_stats(),
+      container=container,
     )
 
   async def handle_key_press(self, event, container):
@@ -585,7 +595,7 @@ class EnvStage(Stage):
       # did not do final save, so do so now
       # want stage to end on keypress so that
       # notifications are visible at final timestep
-      await self.finish_stage()
+      await self.finish_stage(container)
       # and dismiss any present notifications
       start_notification = self.pop_user_data("start_notification")
       if start_notification:
@@ -608,7 +618,7 @@ class EnvStage(Stage):
     # save prior timestep + current event information
     user_stats = self.user_stats()
     timestep = self.get_user_data("stage_state").timestep
-    await self.get_user_queue().put((event.args, timestep, user_stats))
+    await self.get_user_queue().put((event.args, timestep, user_stats, container))
     asyncio.create_task(self._process_save_queue())
 
     #############################
@@ -742,6 +752,94 @@ class Block:
   stages: List[Stage]
   randomize: Union[bool, List[bool]] = False
   metadata: Dict[str, Any] = dataclasses.field(default_factory=dict)
+  name: str = None
+
+  def __len__(self):
+    return len(self.stages)
+
+  def __post_init__(self):
+    self._lock = Lock()  # Add lock for thread safety
+    self._user_locks = {}  # Dictionary to store per-user locks
+    if self.name is None:
+      self.name = f"block_{uuid.uuid4().hex[:8]}"
+
+    # Broadcast metadata
+    self.metadata["name"] = self.name
+    for stage in self.stages:
+      stage.metadata["block_metadata"] = self.metadata
+
+  def get_block_data(self):
+    return app.storage.user.get(f"{self.name}_data", {})
+
+  def get_user_data(self, key, value=None):
+    return self.get_block_data().get(key, value)
+
+  async def set_user_data(self, **kwargs):
+    async with self._lock:
+      block_data = self.get_block_data()
+      block_data.update(kwargs)
+      app.storage.user[f"{self.name}_data"] = block_data
+
+  async def get_user_stage_idx(self):
+    stage_idx = self.get_user_data("stage_idx")
+    if stage_idx is None:
+      stage_idx = 0
+      await self.set_user_data(stage_idx=stage_idx)
+    return stage_idx
+
+  async def get_user_stage_order(self):
+    """This function prepares the order of stages in the block."""
+    if not self.randomize:
+      return list(range(len(self.stages)))
+    stage_order = self.get_user_data("stage_order")
+    if stage_order is not None:
+      return stage_order
+
+    # self.randomize = randomize = [False, False, False, True, True]
+    indices = jnp.arange(len(self.stages))
+    mask = jnp.array(self.randomize)
+
+    # Get randomizable indices
+    random_indices = indices[mask]
+
+    # Permute the randomizable indices
+    rng_key = new_rng()
+    rng_key, subkey = jax.random.split(rng_key)
+    random_indices = jax.random.permutation(subkey, random_indices)
+
+    # Combine back together
+    permuted = indices.at[mask].set(random_indices)
+
+    stage_order = [int(i) for i in permuted]
+    await self.set_user_data(stage_order=stage_order)
+    return stage_order
+
+  async def get_stage(self):
+    stage_idx = await self.get_user_stage_idx()
+    stage_order = await self.get_user_stage_order()
+    return self.stages[stage_order[stage_idx]]
+
+  async def advance_stage(self):
+    stage_idx = await self.get_user_stage_idx()
+    await self.set_user_data(stage_idx=stage_idx + 1)
+    stage_idx = await self.get_user_stage_idx()
+
+  async def not_finished(self):
+    stage_idx = await self.get_user_stage_idx()
+    return stage_idx < len(self.stages)
+
+
+def broadcast_metadata(blocks: List[Block]) -> List[Stage]:
+  """This function assigns the block metadata to each stage."""
+  # assign block description to each stage description
+  for block_idx, block in enumerate(blocks):
+    for stage in block.stages:
+      block.metadata.update(idx=block_idx)
+      stage.metadata["block_metadata"] = block.metadata
+
+
+def nstages(blocks: List[Block]) -> int:
+  return sum(len(block.stages) for block in blocks)
 
 
 def prepare_blocks(blocks: List[Block]) -> List[Stage]:
