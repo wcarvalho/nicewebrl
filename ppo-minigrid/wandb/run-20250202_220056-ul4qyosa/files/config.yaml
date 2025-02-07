@@ -1,0 +1,55 @@
+_wandb:
+    value:
+        cli_version: 0.19.5
+        m: []
+        python_version: 3.10.5
+        t:
+            "1":
+                - 12
+                - 45
+                - 55
+            "2":
+                - 12
+                - 45
+                - 55
+            "3":
+                - 16
+                - 23
+                - 55
+            "4": 3.10.5
+            "5": 0.19.5
+            "8":
+                - 5
+            "12": 0.19.5
+            "13": darwin-arm64
+CLIP_EPS:
+    value: 0.2
+ENT_COEF:
+    value: 0.01
+ENV_NAME:
+    value: MiniGrid-Empty-5x5-v0
+GAE_LAMBDA:
+    value: 0.95
+GAMMA:
+    value: 0.99
+LR:
+    value: 0.00025
+MAX_GRAD_NORM:
+    value: 0.5
+NUM_ENVS:
+    value: 4
+NUM_MINIBATCHES:
+    value: 4
+NUM_STEPS:
+    value: 128
+OBS_SHAPE:
+    value:
+        - 5
+        - 5
+        - 3
+TOTAL_TIMESTEPS:
+    value: 500000
+UPDATE_EPOCHS:
+    value: 4
+VF_COEF:
+    value: 0.5
