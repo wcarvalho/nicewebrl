@@ -41,6 +41,12 @@ jaxmarl = [
     "jax>=0.4.23,<=0.4.38",
     "jaxlib>=0.4.23,<=0.4.38",
 ]
+examples = [
+    "navix",
+    "python-dotenv",
+    "jax>=0.4.16",
+    "jaxlib>=0.4.16",
+]
 
 [project.urls]
 "Homepage" = "https://github.com/wcarvalho/nicewebrl"

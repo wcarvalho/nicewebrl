@@ -56,7 +56,9 @@ def send_clients_environment_action(env_key: str):
       ui.run_javascript(fn)
 
 
-async def get_latest_stage_state(example: struct.PyTreeNode, name: str) -> StageStateModel | None:
+async def get_latest_stage_state(
+  example: struct.PyTreeNode, name: str
+) -> StageStateModel | None:
   """
 
   # NOTE: only change is to use room_id instead of browser_id

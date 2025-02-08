@@ -59,6 +59,7 @@ class StageStateModel(models.Model):
   class Meta:
     table = "stage"
 
+
 class EnvStageState(struct.PyTreeNode):
   timestep: struct.PyTreeNode
   nsteps: jax.Array = jnp.array(1, dtype=jnp.int32)
@@ -66,7 +67,10 @@ class EnvStageState(struct.PyTreeNode):
   nsuccesses: jax.Array = jnp.array(0, dtype=jnp.int32)
   name: str = "stage"
 
-async def get_latest_stage_state(example: struct.PyTreeNode, name: str) -> StageStateModel | None:
+
+async def get_latest_stage_state(
+  example: struct.PyTreeNode, name: str
+) -> StageStateModel | None:
   logger.info("Getting latest stage state")
   latest = (
     await StageStateModel.filter(
@@ -148,7 +152,6 @@ async def save_stage_state(
     max_delay=max_delay,
     synchronous=True,
   )
-
 
 
 @dataclasses.dataclass
@@ -433,7 +436,7 @@ class EnvStage(Stage):
     loaded_stage_state = await get_latest_stage_state(
       example=new_stage_state,
       name=self.name,
-      )
+    )
 
     if loaded_stage_state is None:
       logger.info("No stage state found, starting new stage")
