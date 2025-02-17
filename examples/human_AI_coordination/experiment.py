@@ -74,8 +74,8 @@ default_params = {'random_reset_fn': 0}
 # Load agent models
 ########################################
 agent_model = ActorCriticRNN(action_dim=len(actions), config=base_config)
-agent_model_params_1 = pickle.load(open('model_params_1.pkl', 'rb'))['params']
-agent_model_params_2 = pickle.load(open('model_params_2.pkl', 'rb'))['params']
+agent_model_params_1 = pickle.load(open('model_params/model_params_1.pkl', 'rb'))['params']
+agent_model_params_2 = pickle.load(open('model_params/model_params_2.pkl', 'rb'))['params']
 # stack params of multiple models users could potentially play
 agent_model_params = jax.tree_map(lambda *x: jnp.stack(x), agent_model_params_1, agent_model_params_2)
 init_hidden_state_fn = lambda : ScannedRNN.initialize_carry(1, base_config['GRU_HIDDEN_DIM'])
