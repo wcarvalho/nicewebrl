@@ -1,6 +1,8 @@
 # nicewebrl
 Python library for quickly making interactive RL Apps with [NiceGUI](https://nicegui.io/). It is particularly suited for hooking up [JAX](https://github.com/google/jax) based RL environments to web interfaces. JAX is useful for blazing fast iteration on AI algorithms. With this library, you can use the exact same environment for human subject experiments.
 
+<img src="media/comparing.jpeg" alt="Comparison Image" style="width: 100%; max-width: 800px;">
+
 # Install
 
 ```bash
