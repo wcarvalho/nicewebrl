@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nicewebrl"
-version = "0.0.3"
+version = "0.0.2"
 authors = [
     {name = "Wilka Carvalho", email = "wcarvalho92@gmail.com"},
 ]
@@ -20,8 +20,8 @@ dependencies = [
     "nicegui",
     "tortoise-orm",
     "Pillow",
-    "jax>=0.4.16",
-    "jaxlib>=0.4.16",
+    "jax>=0.4.16,<=0.4.20",
+    "jaxlib>=0.4.16,<=0.4.20",
     "distrax>=0.1.5",
     "flax>=0.8.2",
     "numpy>=1.26.4,<2",
@@ -29,17 +29,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-craftax = [
+examples = [
     "craftax",
     "python-dotenv",
-    "jax>=0.4.16,<=0.4.22",  # needed for backward compatibility
-    "jaxlib>=0.4.16,<=0.4.22",  # needed for backward compatibility
-]
-jaxmarl = [
-    "jaxmarl @ git+https://github.com/FLAIROx/JaxMARL.git",
-    "python-dotenv",
-    "jax>=0.4.23,<=0.4.38",
-    "jaxlib>=0.4.23,<=0.4.38",
 ]
 
 [project.urls]

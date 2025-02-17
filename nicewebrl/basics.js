@@ -6,6 +6,10 @@ async function getImageSeenTime() {
   return window.imageSeenTime;
 } 
 
+async function sleep(ms) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 // Function to send ping to server every 30 seconds
 async function pingServer() {
   console.log('Starting ping loop');
@@ -45,7 +49,16 @@ document.addEventListener('DOMContentLoaded', async function () {
   ////////////////
   // how to handle key presses?
   ////////////////
+  let lastKeyPressTime = 0;
+  const KEY_PRESS_INTERVAL = 200; // 0.2 seconds in milliseconds
+
   document.addEventListener('keydown', async function (event) {
+    const currentTime = Date.now();
+    if (currentTime - lastKeyPressTime < KEY_PRESS_INTERVAL) {
+      return; // Exit if not enough time has passed
+    }
+    lastKeyPressTime = currentTime;
+
     // Prevent default behavior for arrow keys
     if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) {
       event.preventDefault();
@@ -56,13 +69,13 @@ document.addEventListener('DOMContentLoaded', async function () {
     if (window.next_states !== null && window.accept_keys && event.key in window.next_states) {
       if (!window.require_fullscreen || await isFullscreen() ) {
         next_state = window.next_states[event.key];
-        window.next_states = null;
         var imgElement = document.getElementById('stateImage');
         if (imgElement !== null) {
           imgElement.src = next_state;
         }
         window.next_imageSeenTime = new Date();
         console.log('set new image');
+        window.next_states = null;
       }
       // Record the current time when the keydown event occurs
       var keydownTime = new Date();
