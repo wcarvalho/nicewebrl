@@ -215,6 +215,40 @@ class UserAwareOutput(io.TextIOBase):
       self.user_to_color[user_id] = colors[color_idx]
     return self.user_to_color.get(user_id, "")
 
+  def _get_caller_info(self) -> str:
+    """
+    Get information about the calling function using inspect.
+    Returns a formatted string with caller name in brackets, or empty string if caller info not found.
+    """
+    import inspect
+
+    # Get caller info - go back 4 frames to get the actual caller
+    # (skipping logging framework frames)
+    caller_frame = None
+    try:
+      for i in range(4, 10):  # Look through several frames to find non-logging frame
+        frame = inspect.currentframe()
+        for _ in range(i):
+          if frame is not None:
+            frame = frame.f_back
+        if frame and "logging" not in frame.f_code.co_filename:
+          caller_frame = frame
+          break
+    except Exception:
+      pass
+
+    caller_info = ""
+    if caller_frame:
+      try:
+        caller_name = caller_frame.f_code.co_name
+        caller_info = f"[{caller_name}] "
+      except Exception:
+        pass
+      finally:
+        del caller_frame  # Avoid reference cycles
+
+    return caller_info
+
   def _format_message(self, s: str, user_id: str) -> str:
     """
     Format a message with user information and color if applicable.
@@ -223,9 +257,22 @@ class UserAwareOutput(io.TextIOBase):
     if user_id != "global" and s.strip():
       idx = self.user_to_idx[user_id]
       stage_idx = app.storage.user.get("stage_idx")
-      nstages = app.storage.user.get("nstages")
+      block_idx = app.storage.user.get("block_idx")
+      stage_name = app.storage.user.get("stage_name")
+      block_name = app.storage.user.get("block_name")
 
-      msg = f"user {idx}/{self.nusers} |{user_id} |stage {stage_idx}/{nstages}| {s}"
+      msg = f"user {idx}/{self.nusers}:  {user_id} "
+      if block_idx is not None:
+        if block_name is not None:
+          msg += f"|block {block_idx}: {block_name}| "
+        else:
+          msg += f"|block {block_idx}| "
+      if stage_idx is not None:
+        if stage_name is not None:
+          msg += f"|stage {stage_idx}: {stage_name}| "
+        else:
+          msg += f"|stage {stage_idx}| "
+      msg += self._get_caller_info() + s
 
       if self.colored:
         color = self._get_color(user_id)

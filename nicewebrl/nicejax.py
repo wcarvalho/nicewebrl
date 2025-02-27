@@ -14,6 +14,7 @@ import jax.numpy as jnp
 import jax.random
 import numpy as np
 import random
+import sys
 from nicegui import app, ui
 from PIL import Image
 
@@ -200,6 +201,13 @@ def base64_npimage(image: np.ndarray):
   return "data:image/jpeg;base64," + encoded_image
 
 
+def get_size(pytree):
+  leaves = jax.tree_util.tree_leaves(pytree)
+  return sum(
+    leaf.nbytes if hasattr(leaf, "nbytes") else sys.getsizeof(leaf) for leaf in leaves
+  )
+
+
 class StepType(jnp.uint8):
   FIRST: jax.Array = jnp.asarray(0, dtype=jnp.uint8)
   MID: jax.Array = jnp.asarray(1, dtype=jnp.uint8)
@@ -329,9 +337,6 @@ class JaxWebEnv:
     if actions is None:
       actions = try_to_get_actions(env)
 
-    def reset(rng, params):
-      return env.reset(rng, params)
-
     def next_steps(rng, timestep, env_params):
       # vmap over rngs and actions. re-use timestep
       timesteps = jax.vmap(env.step, in_axes=(None, None, 0, None), out_axes=0)(
@@ -339,7 +344,7 @@ class JaxWebEnv:
       )
       return timesteps
 
-    self.reset = jax.jit(reset)
+    self.reset = jax.jit(env.reset)
     self.next_steps = jax.jit(next_steps)
 
   def precompile(self, dummy_env_params: Optional[struct.PyTreeNode] = None) -> None:

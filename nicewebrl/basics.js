@@ -1,5 +1,10 @@
 async function isFullscreen() {
-  return document.fullscreenElement != null;
+  try {
+    return document.fullscreenElement != null;
+  } catch (error) {
+    console.warn('Fullscreen check failed:', error);
+    return false;  // Return a safe default
+  }
 } 
 
 async function getImageSeenTime() {
