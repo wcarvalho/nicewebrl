@@ -852,13 +852,13 @@ def prepare_blocks(blocks: List[Block]) -> List[Stage]:
   It also flattens all blocks into a single list of stages.
   """
   # assign block description to each stage description
+  all_stages = []
   for block_idx, block in enumerate(blocks):
     for stage in block.stages:
       block.metadata.update(idx=block_idx)
       stage.metadata["block_metadata"] = block.metadata
-
-  # flatten all blocks
-  return [stage for block in blocks for stage in block.stages]
+      all_stages.append(stage)
+  return all_stages
 
 
 def generate_stage_order(

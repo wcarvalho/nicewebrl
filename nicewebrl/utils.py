@@ -235,7 +235,7 @@ async def read_msgpack_records(filepath: str):
         logger.error(
           f"Corrupt data in {filepath}: Expected {length} bytes but got {len(data)}"
         )
-        break
+        #break
 
       # Unpack and yield the record
       try:

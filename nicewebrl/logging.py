@@ -388,7 +388,7 @@ def setup_logging(
   watchfiles_logging: bool = False,
   log_filename_fn: Optional[Callable[[str, str], str]] = None,
   ignored_watchfiles_dirs: tuple = ("data/", ".nicegui/"),
-  display_time: bool = True,
+  display_time: bool = False,
 ):
   """
   Set up logging configuration.
