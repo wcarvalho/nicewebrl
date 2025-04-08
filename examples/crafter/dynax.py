@@ -9,6 +9,7 @@ import flashbax as fbx
 import functools
 import numpy as np
 from typing import Optional, Any
+from craftax.craftax_env import make_craftax_env_from_name
 # Assume gymnax environment imports
 
 # --- Dataclasses ---
@@ -166,13 +167,13 @@ class DynaLossFn:
     config: dict # Containing GAMMA, TD_LAMBDA, ONLINE_COEFF, DYNA_COEFF, SIM_LENGTH, etc.
     simulation_policy_fn: callable # Function: (q_vals, rng) -> action
 
-    def calculate_loss(self, online_params, target_params, model_params, batch: Transition, initial_online_state: AgentState, initial_target_state: AgentState, rng: jax.Array) -> tuple[jax.Array, dict]:
+    def calculate_loss(self, online_params, target_params, model_params, batch: Transition, initial_state: AgentState, rng: jax.Array) -> tuple[jax.Array, dict]:
         # Input: batch is sequence [B, T, ...], initial states are [B, ...]
 
         # --- 1. Online Loss Component ---
         # TODO: Unroll online & target Q-networks on the REAL batch data
-        # online_preds_real, _ = self.q_network.apply(online_params, initial_online_state, batch.timestep, rng1, method=self.q_network.unroll)
-        # target_preds_real, _ = self.q_network.apply(target_params, initial_target_state, batch.timestep, rng2, method=self.q_network.unroll)
+        # online_preds_real, _ = self.q_network.apply(online_params, initial_state, batch.timestep, rng1, method=self.q_network.unroll)
+        # target_preds_real, _ = self.q_network.apply(target_params, initial_state, batch.timestep, rng2, method=self.q_network.unroll)
         # TODO: Calculate TD-Lambda loss L_online based on online_preds_real, target_preds_real, batch.action, batch.timestep.reward, batch.timestep.discount
         # TODO: Calculate TD errors TD_online for priority updates
 
@@ -298,6 +299,8 @@ def make_train(config, env, env_params):
         def actor_step(carry, unused):
             agent_state, timestep, rng = carry
             rng, action_rng = jax.random.split(rng)
+
+            # Get action from agent
             predictions, next_agent_state = agent.apply(
                 train_state.online_params,
                 agent_state,
@@ -305,8 +308,12 @@ def make_train(config, env, env_params):
                 action_rng
             )
             action = jnp.argmax(predictions.q_vals, axis=-1)
+
+            # Get next timestep
             obs, env_state, reward, done, _ = vmap_step(config["N_ENVS"])(rng, env_state, action)
             next_timestep = TimeStep(observation=obs, reward=reward, done=done, env_state=env_state)
+
+            # Create transition
             transition = Transition(timestep=next_timestep, action=action, agent_state=next_agent_state)
 
             return (next_agent_state, next_timestep, rng), transition
@@ -371,45 +378,174 @@ def make_train(config, env, env_params):
             model_params = {} # Empty for GroundTruthWorldModel
 
             def _learn_step(train_state, buffer_state, rng):
-                # TODO: Sample batch of sequences from buffer -> sampled_batch
-                # TODO: Get initial RNN states (online/target) from sampled_batch.experience.agent_state
+                # Split RNG for sampling and loss calculation
+                rng, sample_rng, loss_rng = jax.random.split(rng, 3)
+                
+                # Sample batch of sequences from buffer -> sampled_batch
+                sampled_batch = buffer.sample(buffer_state, sample_rng)
+
+                # Get initial RNN states (online/target) from sampled_batch.experience.agent_state
+                initial_state = jax.tree.map(
+                    lambda x: x[:, 0],  # Take first element along time dimension
+                    sampled_batch.experience.agent_state
+                )
+
                 # TODO: Implement Burn-in logic (optional) -> update initial states, get learn_batch
-                # TODO: Call jax.value_and_grad(loss_fn.calculate_loss, has_aux=True)(...)
+
+                # Call jax.value_and_grad(loss_fn.calculate_loss, has_aux=True)(...)
                 #       - Pass online_params, target_params, model_params, learn_batch, initial_states, rng
                 #       - Returns: (loss, (aux_data)), grads
-                # TODO: Apply gradients: train_state = train_state.apply_gradients(grads=grads)
-                # TODO: Update priorities in buffer: buffer_state = buffer.set_priorities(buffer_state, indices, aux_data["priorities"])
-                # TODO: Increment update counter in train_state
-                # TODO: Log metrics from aux_data["metrics"]
-                # return train_state, buffer_state
-                pass
+                (loss, aux_data), grads = jax.value_and_grad(loss_fn.calculate_loss, has_aux=True)(
+                    train_state.online_params,
+                    train_state.target_network_params,
+                    model_params,
+                    sampled_batch,
+                    initial_state,
+                    loss_rng
+                )
 
-            # TODO: Check learning conditions (timesteps > LEARNING_STARTS, buffer.can_sample)
-            # TODO: Use jax.lax.cond to call perform_learn_step or do nothing
+                # Apply gradients: train_state = train_state.apply_gradients(grads=grads)
+                train_state = train_state.apply_gradients(grads=grads)
+
+                # TODO: Update priorities in buffer: buffer_state = buffer.set_priorities(buffer_state, indices, aux_data["priorities"])
+
+                # Increment update counter in train_state
+                train_state = train_state.replace(n_updates=train_state.n_updates + 1)
+
+                # TODO: Log metrics from aux_data["metrics"]
+
+                return train_state, buffer_state, rng
+
+            # Check learning conditions (timesteps > LEARNING_STARTS, buffer.can_sample)
+            # Use jax.lax.cond to call perform_learn_step or do nothing
             # train_state, buffer_state = jax.lax.cond(...)
+            train_state, buffer_state, rng = jax.lax.cond(
+                (train_state.timesteps > config["LEARNING_STARTS"]) & buffer.can_sample(buffer_state),
+                lambda ts, bs, r: _learn_step(ts, bs, r),
+                lambda ts, bs, r: (ts, bs, r),
+                train_state,
+                buffer_state,
+                rng
+            )
 
             # --- 4. Update Target Network ---
-            # TODO: Periodically copy online_params to target_network_params in train_state
+            # Periodically copy online_params to target_network_params in train_state
+            # TODO: Use optax.incremental_update to update target_network_params
+            train_state = jax.lax.cond(
+                train_state.n_updates % config["TARGET_UPDATE_INTERVAL"] == 0,
+                lambda ts: ts.replace(target_network_params=ts.params),
+                lambda ts: ts,
+                train_state
+            )
 
             # --- 5. Logging / Evaluation ---
             # TODO: Periodically log learner metrics and run evaluation rollouts
 
             # --- 6. Return updated runner state ---
-            # TODO: Update runner_state with new train_state, buffer_state, rng
-            # return runner_state, {}
-            pass
+            # Update runner_state with new train_state, buffer_state, rng
+            runner_state = runner_state.replace(
+                train_state=train_state,
+                buffer_state=buffer_state,
+                rng=rng
+            )
+            
+            return runner_state, {}
 
-        # TODO: JIT the _train_step function
-        # TODO: Initialize the initial runner_state
-        # TODO: Run the main loop: jax.lax.scan(_train_step, initial_runner_state, None, config["NUM_UPDATES"])
-        # TODO: Return results
+        # JIT the _train_step function
+        _train_step = jax.jit(_train_step)
+
+        # Initialize the initial runner_state
+        initial_runner_state = RunnerState(
+            train_state=train_state,
+            env_timestep=initial_timestep,
+            agent_state=initial_agent_state,
+            buffer_state=buffer_state,
+            rng=rng
+        )
+
+        # Run the main loop: jax.lax.scan(_train_step, initial_runner_state, None, config["NUM_UPDATES"])
+        runner_state, _ = jax.lax.scan(_train_step, initial_runner_state, None, config["NUM_UPDATES"])
+
+        # Return results
+        # TODO: Add any final logging or cleanup here
+        return runner_state
 
     return train # End of make_train
 
 # --- Main Execution ---
 if __name__ == "__main__":
-    # TODO: Define config dictionary
-    # TODO: Create env and env_params
-    # TODO: Call make_train(config, env, env_params)
-    # TODO: Run the returned train function
-    pass
+    # Define config dictionary
+    config = {
+        # --- Environment Settings ---
+        "ENV_NAME": "Craftax-Symbolic-v1", # Example, adjust as needed
+        "N_ENVS": 4,  # Number of parallel environments (PureJaxRL DQN used 10, can increase)
+
+        # --- Training Loop Settings ---
+        "TOTAL_TIMESTEPS": 5e5,  # Total environment steps (PureJaxRL DQN used 5e5)
+        "TRAINING_INTERVAL": 1,   # How many env steps per actor sequence collection (R2D2/ACME often use 1)
+                                # NOTE: If 1, buffer adds [B=N_ENVS, T=1]. If >1, adds [B=N_ENVS, T=INTERVAL]
+        "LEARNING_STARTS": 10000, # Timesteps before learning begins (PureJaxRL DQN used 10k)
+        "TARGET_UPDATE_INTERVAL": 250, # How many LEARNER UPDATES between target network syncs (R2D2 uses ~2500 steps)
+
+        # --- Network Settings ---
+        "RNN_HIDDEN_DIM": 256,     # Size of RNN hidden state (Dyna code used 256)
+        "MLP_HIDDEN_DIM": 128,     # Hidden dim for observation encoder MLP
+        "NUM_MLP_LAYERS": 1,       # Layers for observation encoder MLP
+        "Q_HIDDEN_DIM": 512,       # Hidden dim for Q-head MLP (Dyna code used 512)
+        "NUM_Q_LAYERS": 1,         # Layers for Q-head MLP (Dyna code used 1)
+        "ACTIVATION": "relu",      # Activation function
+        "USE_BIAS": True,          # Whether to use bias in Dense layers
+
+        # --- Optimizer Settings ---
+        "LEARNING_RATE": 2.5e-4,   # Learning rate (PureJaxRL DQN used 2.5e-4)
+        "LR_LINEAR_DECAY": False,  # Whether to use linear LR decay
+        "EPS_ADAM": 1e-5,          # Adam optimizer epsilon (ACME default 1e-5)
+        "MAX_GRAD_NORM": 40.0,     # Gradient clipping norm (ACME default 40.0)
+
+        # --- Buffer Settings ---
+        "BUFFER_SIZE": 50000,      # Total transitions in buffer (R2D2 often uses 1M+, adjust based on memory)
+        "BUFFER_BATCH_SIZE": 64,   # Batch size sampled from buffer for learning (e.g., 32, 64)
+        "SEQUENCE_LENGTH": 40,     # Length of sequences sampled from buffer (R2D2 uses ~80)
+        "PERIOD": 1,               # Store sequences overlapping by N-1 steps (1 is standard)
+        "BURN_IN_LENGTH": 4,       # Number of steps to burn-in RNN state (0 disables, R2D2 uses ~half sequence length)
+
+        # --- Prioritized Replay Settings ---
+        "PRIORITY_EXPONENT": 0.9,            # Alpha exponent for PER (fbx default 0.9)
+        "IMPORTANCE_SAMPLING_EXPONENT": 0.6, # Beta exponent for PER IS weights (DynaLossFn default 0.6)
+        "MAX_PRIORITY_WEIGHT": 0.9,          # Mixture coefficient for max/mean priority (DynaLossFn default 0.9)
+
+        # --- Loss Function Settings ---
+        "GAMMA": 0.99,             # Discount factor
+        "TD_LAMBDA": 0.95,         # TD-Lambda parameter (R2D2 uses 0.95)
+        "STEP_COST": 0.0,          # Optional cost added per step (DynaLossFn default 0.0)
+        "ONLINE_COEFF": 1.0,       # Weight for the loss on real data
+        "DYNA_COEFF": 1.0,         # Weight for the loss on simulated data (DynaLossFn default 1.0)
+
+        # --- Dyna Simulation Settings ---
+        "NUM_SIMULATIONS": 2,      # Number of parallel simulations per starting state (DynaLossFn default 2)
+        "SIMULATION_LENGTH": 5,    # Length of each simulated rollout (DynaLossFn default 5)
+        "WINDOW_SIZE": 20,         # Size of the rolling window on real data to trigger simulations (DynaLossFn default 20)
+        "SIM_EPSILON_SETTING": 1,  # How simulation epsilon is chosen (1: ACME logspace, 2: 0.9-0.1 logspace, 3: fixed)
+        "SIM_EPSILON": 0.1,        # Epsilon value if SIM_EPSILON_SETTING is 3
+
+        # --- Actor Settings (Exploration) ---
+        # Choose one exploration strategy
+        "FIXED_EPSILON": 0,        # 0: Linear Decay, 1: Fixed Logspace (ACME), 2: Fixed Logspace (0.9-0.1)
+        "EPSILON_START": 1.0,      # Starting epsilon for linear decay
+        "EPSILON_FINISH": 0.05,    # Final epsilon for linear decay
+        "EPSILON_ANNEAL_TIME": 25e4,# Timesteps to anneal epsilon over (PureJaxRL DQN used 25e4)
+
+        # --- Miscellaneous ---
+        "SEED": 42,
+        "LEARNER_LOG_PERIOD": 100,  # How many LEARNER UPDATES between logging losses/metrics
+        "EVAL_LOG_PERIOD": 100,     # How many LEARNER UPDATES between running evaluation episodes
+        "GRADIENT_LOG_PERIOD": 500, # How many LEARNER UPDATES between logging gradients (0 to disable)
+    }
+
+    # Create env and env_params
+    env = make_craftax_env_from_name("Craftax-Symbolic-v1", auto_reset=True)
+    env_params = env.default_params
+
+    # Call make_train(config, env, env_params)
+    train = make_train(config, env, env_params)
+    train(jax.random.PRNGKey(config["SEED"]))
