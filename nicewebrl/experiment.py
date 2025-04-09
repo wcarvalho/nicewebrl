@@ -10,8 +10,10 @@ from nicewebrl.stages import Block, Stage
 from nicewebrl.container import Container
 from nicewebrl.nicejax import new_rng
 from nicewebrl.logging import get_logger
+from nicewebrl.utils import get_user_lock
 
 logger = get_logger(__name__)
+
 
 @dataclasses.dataclass
 class Experiment(Container):
@@ -23,7 +25,7 @@ class Experiment(Container):
     super().__post_init__()
     if self.name is None:
       self.name = f"experiment_{uuid.uuid4().hex[:8]}"
-  
+
   @property
   def num_stages(self):
     return sum(len(block.stages) for block in self.blocks)
@@ -35,17 +37,17 @@ class Experiment(Container):
   def initialize(self):
     app.storage.user["stage_idx"] = app.storage.user.get("stage_idx", 0)
     app.storage.user["block_idx"] = app.storage.user.get("block_idx", 0)
-    app.storage.user["block_name"] = 'undefined'
-    app.storage.user["stage_name"] = 'undefined'
+    app.storage.user["block_name"] = "undefined"
+    app.storage.user["stage_name"] = "undefined"
 
-  def get_blocks(self, ordered: bool = True):
+  async def get_blocks(self, ordered: bool = True):
     if ordered:
-      order = self.get_block_order()
+      order = await self.get_block_order()
       return [self.blocks[i] for i in order]
     else:
       return self.blocks
 
-  def get_block_order(self):
+  async def get_block_order(self):
     if not self.randomize:
       return list(range(len(self.blocks)))
     block_order = self.get_user_data("block_order")
@@ -67,7 +69,7 @@ class Experiment(Container):
     permuted = indices.at[mask].set(random_indices)
 
     block_order = [int(i) for i in permuted]
-    self.set_user_data(block_order=block_order)
+    await self.set_user_data(block_order=block_order)
     return block_order
 
   def get_experiment_stage_idx(self):
@@ -84,14 +86,14 @@ class Experiment(Container):
       app.storage.user["block_idx"] = block_idx
     return block_idx
 
-  def get_block(self):
+  async def get_block(self):
     """
-    
+
     First, get the block_idx. if
     """
     # first get the block
     block_idx = self.get_block_idx()
-    block_order = self.get_block_order()
+    block_order = await self.get_block_order()
     if block_idx >= len(block_order):
       logger.info("Defaulting to final block")
       block_idx = len(block_order) - 1
@@ -100,31 +102,33 @@ class Experiment(Container):
     app.storage.user["block_name"] = block.name
     return block
 
-  def get_stage(self):
+  async def get_stage(self):
     """
-    
+
     First, get the block_idx. if
     """
     # first get the block
-    block = self.get_block()
+    block: Block = await self.get_block()
 
     # then get the stage
-    stage = block.get_stage()
+    stage: Stage = await block.get_stage()
     app.storage.user["stage_name"] = stage.name
     return stage
 
-  def advance_block(self):
+  async def advance_block(self):
     block_idx = self.get_block_idx()
-    app.storage.user["block_idx"] = block_idx + 1
+    async with get_user_lock():
+      app.storage.user["block_idx"] = block_idx + 1
 
-  def advance_stage(self):
+  async def advance_stage(self):
     # advance stage within the block
-    block = self.get_block()
-    block.advance_stage()
+    block = await self.get_block()
+    await block.advance_stage()
 
     # advance experiment stage idx
     stage_idx = self.get_experiment_stage_idx()
-    app.storage.user["stage_idx"] = stage_idx + 1
+    async with get_user_lock():
+      app.storage.user["stage_idx"] = stage_idx + 1
 
   def not_finished(self):
     block_idx = self.get_block_idx()

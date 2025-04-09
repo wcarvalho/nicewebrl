@@ -2,6 +2,7 @@ import dataclasses
 from asyncio import Lock
 from nicegui import app, ui
 import uuid
+from nicewebrl.utils import get_user_lock
 
 @dataclasses.dataclass
 class Container:
@@ -19,7 +20,8 @@ class Container:
   def get_user_data(self, key, value=None):
     return self.get_data().get(key, value)
 
-  def set_user_data(self, **kwargs):
+  async def set_user_data(self, **kwargs):
     data = self.get_data()
     data.update(kwargs)
-    app.storage.user[f"{self.name}_data"] = data
+    async with get_user_lock():
+      app.storage.user[f"{self.name}_data"] = data

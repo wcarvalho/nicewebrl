@@ -48,6 +48,17 @@ document.addEventListener('DOMContentLoaded', async function () {
   window.next_states = null;
 
   ////////////////
+  // Prevent spacebar from toggling fullscreen
+  ////////////////
+  document.addEventListener('keydown', function(event) {
+    // Check if the key pressed is spacebar
+    if (event.key === " " || event.code === "Space") {
+      // Prevent the default action (toggling fullscreen)
+      event.preventDefault();
+    }
+  }, true); // Using capturing phase to catch the event before other handlers
+
+  ////////////////
   // how to handle key presses?
   ////////////////
   document.addEventListener('keydown', async function (event) {

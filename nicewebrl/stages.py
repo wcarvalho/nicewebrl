@@ -54,7 +54,7 @@ class StageStateModel(models.Model):
   id = fields.IntField(primary_key=True)
   name = fields.CharField(max_length=255, index=True)
   session_id = fields.CharField(max_length=255, index=True)
-  #stage_idx = fields.IntField(index=True)
+  # stage_idx = fields.IntField(index=True)
   data = fields.BinaryField()
 
   class Meta:
@@ -77,7 +77,7 @@ async def get_latest_stage_state(
     await StageStateModel.filter(
       session_id=app.storage.browser["id"],
       name=name,
-      #stage_idx=app.storage.user["stage_idx"],
+      # stage_idx=app.storage.user["stage_idx"],
     )
     .order_by("-id")
     .first()
@@ -142,7 +142,7 @@ async def save_stage_state(
 ):
   model = StageStateModel(
     session_id=app.storage.browser["id"],
-    #stage_idx=app.storage.user["stage_idx"],
+    # stage_idx=app.storage.user["stage_idx"],
     name=stage_state.name,
     data=serialization.to_bytes(stage_state),
   )
@@ -482,7 +482,6 @@ class EnvStage(Stage):
       timestep_data = self.custom_data_fn(timestep)
       timestep_data = jax.tree_map(make_serializable, timestep_data)
 
-    timestep = self.preprocess_timestep(timestep)
     serialized_timestep = serialization.to_bytes(timestep)
 
     step_metadata = copy.deepcopy(self.metadata)
@@ -575,10 +574,10 @@ class EnvStage(Stage):
 
   async def handle_key_press(self, event, container):
     # Get or create lock for this specific user
-    async with self.get_user_lock():
-      await self._handle_key_press(event, container)
+    #async with self.get_user_lock():
+    #  await self._handle_key_press(event, container)
 
-  async def _handle_key_press(self, event, container):
+    #async def _handle_key_press(self, event, container):
     key = event.args["key"]
     if self.verbosity:
       logger.info(f"handle_key_press key: {key}")
@@ -621,7 +620,9 @@ class EnvStage(Stage):
     # save prior timestep + current event information
     user_stats = self.user_stats()
     timestep = self.get_user_data("stage_state").timestep
-    await self.get_user_queue().put((event.args, timestep, user_stats))
+    processed_timestep = self.preprocess_timestep(timestep)
+    async with self.get_user_lock():
+      await self.get_user_queue().put((event.args, processed_timestep, user_stats))
     asyncio.create_task(self._process_save_queue())
 
     #############################
@@ -769,26 +770,26 @@ class Block(Container):
     for stage in self.stages:
       stage.metadata["block_metadata"] = self.metadata
 
-  #def get_block_data(self):
+  # def get_block_data(self):
   #  return app.storage.user.get(f"'{self.name}'_data", {})
 
-  #def get_user_data(self, key, value=None):
+  # def get_user_data(self, key, value=None):
   #  return self.get_block_data().get(key, value)
 
-  #async def set_user_data(self, **kwargs):
+  # async def set_user_data(self, **kwargs):
   #  block_data = self.get_block_data()
   #  block_data.update(kwargs)
   #  async with self._lock:
   #    app.storage.user[f"'{self.name}'_data"] = block_data
 
-  def get_block_stage_idx(self):
+  async def get_block_stage_idx(self):
     stage_idx = self.get_user_data("stage_idx")
     if stage_idx is None:
       stage_idx = 0
-      self.set_user_data(stage_idx=stage_idx)
+      await self.set_user_data(stage_idx=stage_idx)
     return stage_idx
 
-  def get_user_stage_order(self):
+  async def get_user_stage_order(self):
     """This function prepares the order of stages in the block."""
     if not self.randomize:
       return list(range(len(self.stages)))
@@ -812,12 +813,12 @@ class Block(Container):
     permuted = indices.at[mask].set(random_indices)
 
     stage_order = [int(i) for i in permuted]
-    self.set_user_data(stage_order=stage_order)
+    await self.set_user_data(stage_order=stage_order)
     return stage_order
 
-  def get_stage(self):
-    stage_idx = self.get_block_stage_idx()
-    stage_order = self.get_user_stage_order()
+  async def get_stage(self):
+    stage_idx = await self.get_block_stage_idx()
+    stage_order = await self.get_user_stage_order()
     if stage_idx >= len(stage_order):
       logger.info("Defaulting to final stage")
       stage_idx = len(stage_order) - 1
@@ -825,12 +826,12 @@ class Block(Container):
     app.storage.user["stage_name"] = stage.name
     return stage
 
-  def advance_stage(self):
-    stage_idx = self.get_block_stage_idx()
-    self.set_user_data(stage_idx=stage_idx + 1)
+  async def advance_stage(self):
+    stage_idx = await self.get_block_stage_idx()
+    await self.set_user_data(stage_idx=stage_idx + 1)
 
-  def not_finished(self):
-    stage_idx = self.get_block_stage_idx()
+  async def not_finished(self):
+    stage_idx = await self.get_block_stage_idx()
     return stage_idx < len(self.stages)
 
 

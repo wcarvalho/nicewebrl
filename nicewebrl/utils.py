@@ -11,9 +11,17 @@ import msgpack
 import os.path
 import random
 from datetime import datetime
+import struct
 
 logger = get_logger(__name__)
 
+_user_locks = {}
+
+def get_user_lock():
+  user_seed = app.storage.user["seed"]
+  if user_seed not in _user_locks:
+    _user_locks[user_seed] = asyncio.Lock()
+  return _user_locks[user_seed]
 
 async def toggle_fullscreen():
   logger.info("Toggling fullscreen")
@@ -235,17 +243,63 @@ async def read_msgpack_records(filepath: str):
         logger.error(
           f"Corrupt data in {filepath}: Expected {length} bytes but got {len(data)}"
         )
-        #break
+        # break
 
       # Unpack and yield the record
       try:
-        record = msgpack.unpackb(data)
+        record = msgpack.unpackb(data, strict_map_key=False)
         yield record
       except Exception as e:
         logger.error(f"Failed to unpack record in {filepath}: {e}")
         break
 
 
+def read_msgpack_records_sync(filepath: str):
+  """Synchronous version of read_msgpack_records that reads msgpack records from a file."""
+  try:
+    with open(filepath, "rb") as f:
+      # Read the file content
+      content = f.read()
+
+      # Initialize position
+      pos = 0
+
+      # Read records until we reach the end of the file
+      while pos < len(content):
+        # Read the size of the next record
+        size_bytes = content[pos : pos + 4]
+        if len(size_bytes) < 4:
+          break
+
+        size = struct.unpack(">I", size_bytes)[0]
+        pos += 4
+
+        # Read the record data
+        if pos + size > len(content):
+          logger.error(f"Incomplete record in {filepath}")
+          break
+
+        data = content[pos : pos + size]
+        pos += size
+
+        # Unpack and yield the record
+        try:
+          record = msgpack.unpackb(data, strict_map_key=False)
+          yield record
+        except Exception as e:
+          logger.error(f"Failed to unpack record in {filepath}: {e}")
+          break
+  except FileNotFoundError:
+    logger.error(f"File not found: {filepath}")
+  except Exception as e:
+    logger.error(f"Error reading {filepath}: {e}")
+
+
 async def read_all_records(filepath: str) -> List[Dict]:
   """Helper function to read all records into a list."""
   return [record async for record in read_msgpack_records(filepath)]
+
+
+def read_all_records_sync(filepath: str) -> List[Dict]:
+  """Synchronous version that reads all msgpack records from a file and returns them as a list."""
+  return list(read_msgpack_records_sync(filepath))
