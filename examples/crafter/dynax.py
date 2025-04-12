@@ -335,8 +335,8 @@ def make_train(config, env, env_params):
         initial_timestep = env.reset(env_rng, env_params)
         initial_agent_state = AgentState(rnn_state=agent.initialize_carry((1,)))
 
-        def _train_step(carry, unused):
-            train_state, env_timestep, agent_state, buffer_state, rng = carry
+        def _train_step(runner_state, unused):
+            train_state, env_timestep, agent_state, buffer_state, rng = runner_state
 
             # --- 1. Collect Experience ---
             # Use jax.lax.scan with actor_step and env.step (vmap_step) for config["TRAINING_INTERVAL"] steps
@@ -374,6 +374,8 @@ def make_train(config, env, env_params):
                     lambda x: x[:, 0],  # Take first element along time dimension
                     sampled_batch.experience.agent_state
                 )
+
+                # TODO: Implement Burn-in logic (optional) -> update initial states, get learn_batch
 
                 # Call jax.value_and_grad(loss_fn.calculate_loss, has_aux=True)(...)
                 #       - Pass online_params, target_params, model_params, learn_batch, initial_states, rng
@@ -430,7 +432,7 @@ def make_train(config, env, env_params):
         _train_step = jax.jit(_train_step)
 
         # Initialize the initial states
-        initial_states = (
+        runner_state = (
             train_state,
             initial_timestep,
             initial_agent_state,
@@ -439,10 +441,10 @@ def make_train(config, env, env_params):
         )
 
         # Run the main loop
-        final_states, _ = jax.lax.scan(_train_step, initial_states, None, config["NUM_UPDATES"])
+        runner_state, _ = jax.lax.scan(_train_step, runner_state, None, config["NUM_UPDATES"])
 
         # Return results
-        return final_states
+        return runner_state
 
     return train # End of make_train
 
