@@ -34,6 +34,7 @@ class Transition:
     action: jax.Array       # Action taken at time t (a_t)
     agent_state: AgentState # Agent's RNN state *before* processing timestep t (h_{t-1})
 
+@struct.dataclass
 class CustomTrainState(TrainState):
     target_network_params: flax.core.FrozenDict
     timesteps: int
@@ -232,7 +233,6 @@ def simulation_policy_fn(q_vals, rng, epsilon):
 # --- Training Loop Structure (Conceptual) ---
 
 def make_train(config, env, env_params):
-
     vmap_reset = lambda n_envs: lambda rng: jax.vmap(env.reset, in_axes=(0, None))(
         jax.random.split(rng, n_envs), env_params
     )
@@ -330,26 +330,21 @@ def make_train(config, env, env_params):
             simulation_policy_fn=simulation_policy
         )
         
-        # Initialize RunnerState
+        # Initialize initial states
         rng, env_rng = jax.random.split(rng)
         initial_timestep = env.reset(env_rng, env_params)
         initial_agent_state = AgentState(rnn_state=agent.initialize_carry((1,)))
-        runner_state = RunnerState(
-            train_state=train_state,
-            env_timestep=initial_timestep,
-            agent_state=initial_agent_state,
-            buffer_state=buffer_state,
-            rng=rng
-        )
 
-        def _train_step(runner_state, _):
+        def _train_step(carry, unused):
+            train_state, env_timestep, agent_state, buffer_state, rng = carry
+
             # --- 1. Collect Experience ---
             # Use jax.lax.scan with actor_step and env.step (vmap_step) for config["TRAINING_INTERVAL"] steps
             #       - Manage agent_state (RNN state) across steps
             #       - Collect sequence of Transitions (including agent_state) -> traj_batch
             (agent_state, timestep, rng), traj_batch = jax.lax.scan(
                 actor_step,
-                (runner_state.agent_state, runner_state.env_timestep, runner_state.rng),
+                (agent_state, env_timestep, rng),
                 None,
                 config["TRAINING_INTERVAL"]
             )
@@ -362,17 +357,7 @@ def make_train(config, env, env_params):
             buffer_state = buffer.add(buffer_state, traj_batch)
 
             # Update total timesteps counter in train_state
-            train_state = runner_state.train_state
             train_state = train_state.replace(timesteps=train_state.timesteps + config["TRAINING_INTERVAL"])
-
-            # Update runner_state (new env_timestep, agent_state, rng)
-            runner_state = RunnerState(
-                train_state=train_state,
-                env_timestep=timestep,
-                agent_state=agent_state,
-                buffer_state=buffer_state,
-                rng=rng
-            )
 
             # --- 3. Learning Update ---
             model_params = {} # Empty for GroundTruthWorldModel
@@ -390,8 +375,6 @@ def make_train(config, env, env_params):
                     sampled_batch.experience.agent_state
                 )
 
-                # TODO: Implement Burn-in logic (optional) -> update initial states, get learn_batch
-
                 # Call jax.value_and_grad(loss_fn.calculate_loss, has_aux=True)(...)
                 #       - Pass online_params, target_params, model_params, learn_batch, initial_states, rng
                 #       - Returns: (loss, (aux_data)), grads
@@ -408,7 +391,6 @@ def make_train(config, env, env_params):
                 train_state = train_state.apply_gradients(grads=grads)
 
                 # TODO: Update priorities in buffer: buffer_state = buffer.set_priorities(buffer_state, indices, aux_data["priorities"])
-
                 # Increment update counter in train_state
                 train_state = train_state.replace(n_updates=train_state.n_updates + 1)
 
@@ -441,34 +423,26 @@ def make_train(config, env, env_params):
             # --- 5. Logging / Evaluation ---
             # TODO: Periodically log learner metrics and run evaluation rollouts
 
-            # --- 6. Return updated runner state ---
-            # Update runner_state with new train_state, buffer_state, rng
-            runner_state = runner_state.replace(
-                train_state=train_state,
-                buffer_state=buffer_state,
-                rng=rng
-            )
-            
-            return runner_state, {}
+            # --- 6. Return updated states ---
+            return (train_state, timestep, agent_state, buffer_state, rng), {}
 
         # JIT the _train_step function
         _train_step = jax.jit(_train_step)
 
-        # Initialize the initial runner_state
-        initial_runner_state = RunnerState(
-            train_state=train_state,
-            env_timestep=initial_timestep,
-            agent_state=initial_agent_state,
-            buffer_state=buffer_state,
-            rng=rng
+        # Initialize the initial states
+        initial_states = (
+            train_state,
+            initial_timestep,
+            initial_agent_state,
+            buffer_state,
+            rng
         )
 
-        # Run the main loop: jax.lax.scan(_train_step, initial_runner_state, None, config["NUM_UPDATES"])
-        runner_state, _ = jax.lax.scan(_train_step, initial_runner_state, None, config["NUM_UPDATES"])
+        # Run the main loop
+        final_states, _ = jax.lax.scan(_train_step, initial_states, None, config["NUM_UPDATES"])
 
         # Return results
-        # TODO: Add any final logging or cleanup here
-        return runner_state
+        return final_states
 
     return train # End of make_train
 
