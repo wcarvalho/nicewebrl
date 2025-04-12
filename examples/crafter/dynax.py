@@ -53,54 +53,11 @@ class Predictions:
     q_vals: jax.Array
     # Optionally store other network outputs if needed
 
-@struct.dataclass
-class WorldModelState:
-    # Placeholder for potential learned world model state
-    internal_state: Optional[jax.Array] = None
-
-@struct.dataclass
-class WorldModelOutput:
-    next_observation: jax.Array
-    reward: jax.Array
-    done: jax.Array # Predicted termination
-    # Potentially next env_state if model predicts it directly
-    next_env_state: Optional[struct.PyTreeNode] = None
-
-
 # --- Network Definition ---
+# Based on ScannedRNN from PureJaxRL
+class DynaAgent(nn.Module):
+    config: dict
 
-class RecurrentQNetwork(nn.Module):
-    action_dim: int
-    rnn_hidden_dim: int
-    # Other config (MLP dims, activation, etc.)
-
-    def setup(self):
-        # TODO: Define observation_encoder (e.g., MLP)
-        # TODO: Define rnn_cell (e.g., nn.LSTMCell)
-        # TODO: Define q_head (e.g., MLP or DuellingMLP)
-        pass
-
-    def initialize_carry(self, batch_dims):
-        # TODO: Return initial RNN state (zeros) with correct batch shape
-        pass
-
-    def __call__(self, agent_state: AgentState, timestep: TimeStep, rng: jax.Array) -> tuple[Predictions, AgentState]:
-        # Single step logic (for actor and simulation)
-        # TODO: Encode observation from timestep.observation
-        # TODO: Pass (agent_state.rnn_state, encoded_obs, timestep.done) through rnn_cell
-        # TODO: Pass RNN output through q_head
-        # TODO: Return Predictions(q_vals=...) and next AgentState(rnn_state=...)
-        pass
-
-    def unroll(self, initial_agent_state: AgentState, sequence: Transition, rng: jax.Array) -> tuple[Predictions, AgentState]:
-        # Process a sequence of transitions using jax.lax.scan
-        # Input: initial_agent_state (h_0), sequence (timesteps t_1..t_N)
-        # Output: Predictions (q_vals q_1..q_N), final_agent_state (h_N)
-        # TODO: Implement scan loop calling the single-step logic
-        pass
-
-# --- ScannedRNN --- from PureJaxRl
-class ScannedRNN(nn.Module):
     @functools.partial(
         nn.scan,
         variable_broadcast="params",
@@ -127,44 +84,31 @@ class ScannedRNN(nn.Module):
         return nn.GRUCell.initialize_carry(
             jax.random.PRNGKey(0), (batch_size,), hidden_size
         )
-
-# --- World Model Definition ---
-
-class WorldModel(nn.Module):
-    # Base class/interface (can be a simple struct if no learnable params yet)
-
-    @struct.dataclass
-    class StateInfo:
-        # What the world model needs to predict the next step
-        observation: jax.Array
-        env_state: struct.PyTreeNode # Needed for GroundTruth model
-
-    def apply_model(self, params, model_state: WorldModelState, current_state_info: StateInfo, action: jax.Array, rng: jax.Array) -> tuple[WorldModelOutput, WorldModelState]:
-        # Abstract method
-        raise NotImplementedError
-
-class GroundTruthWorldModel(WorldModel):
-    env: object # Gymnax environment instance
-    env_params: object # Gymnax env params
-
-    def setup(self):
-        # No learnable parameters needed
-        pass
-
-    def apply_model(self, params, model_state: WorldModelState, current_state_info: WorldModel.StateInfo, action: jax.Array, rng: jax.Array) -> tuple[WorldModelOutput, WorldModelState]:
-        # Uses the real environment step function
-        # TODO: Call self.env.step(rng, current_state_info.env_state, action, self.env_params)
-        # TODO: Extract next_obs, reward, done, next_env_state from the result
-        # TODO: Package into WorldModelOutput
-        # TODO: Return WorldModelOutput and unchanged model_state (since it's stateless)
-        pass
+    
+    def apply_world_model(self, env, env_params, env_state: Any, action: jax.Array, rng: jax.Array) -> TimeStep:
+        """
+        Simulates one step using the 'world model' (ground truth env).
+        """
+        # vmap the step function
+        vmap_step = lambda n_envs: lambda rng, env_state, action: jax.vmap(
+            env.step, in_axes=(0, 0, 0, None)
+        )(jax.random.split(rng, n_envs), env_state, action, env_params)
+        
+        # Implement ground truth env.step call
+        next_obs, next_env_state, reward, done, _ = vmap_step(self.config["N_ENVS"])(rng, env_state, action)
+        output = TimeStep(
+            observation=next_obs,
+            reward=reward,
+            done=done,
+            env_state=next_env_state
+        )
+        return output
 
 # --- Loss Function ---
 
 @struct.dataclass
 class DynaLossFn:
-    q_network: RecurrentQNetwork
-    world_model: WorldModel
+    q_network: DynaAgent
     config: dict # Containing GAMMA, TD_LAMBDA, ONLINE_COEFF, DYNA_COEFF, SIM_LENGTH, etc.
     simulation_policy_fn: callable # Function: (q_vals, rng) -> action
 
@@ -246,9 +190,8 @@ def make_train(config, env, env_params):
         init_obs, env_state = vmap_reset(config["N_ENVS"])(_rng)
 
         # Initialize RecurrentQNetwork (agent), get initial params
-        agent = RecurrentQNetwork(
-            action_dim=env.action_space.n,
-            rnn_hidden_dim=config["RNN_HIDDEN_DIM"]
+        agent = DynaAgent(
+            config=config
         )
         rng, init_rng = jax.random.split(rng)
         dummy_obs = jnp.zeros(env.observation_space(env_params).shape)
