@@ -20,7 +20,7 @@ class TimeStep:
     observation: jax.Array
     reward: jax.Array
     done: jax.Array
-    env_state: struct.PyTreeNode # Raw environment state
+    state: struct.PyTreeNode # Raw environment state
 
 @struct.dataclass
 class AgentState:
@@ -85,22 +85,22 @@ class DynaAgent(nn.Module):
             jax.random.PRNGKey(0), (batch_size,), hidden_size
         )
     
-    def apply_world_model(self, env, env_params, env_state: Any, action: jax.Array, rng: jax.Array) -> TimeStep:
+    def apply_world_model(self, env, env_params, state: Any, action: jax.Array, rng: jax.Array) -> TimeStep:
         """
         Simulates one step using the 'world model' (ground truth env).
         """
         # vmap the step function
-        vmap_step = lambda n_envs: lambda rng, env_state, action: jax.vmap(
+        vmap_step = lambda n_envs: lambda rng, state, action: jax.vmap(
             env.step, in_axes=(0, 0, 0, None)
-        )(jax.random.split(rng, n_envs), env_state, action, env_params)
+        )(jax.random.split(rng, n_envs), state, action, env_params)
         
         # Implement ground truth env.step call
-        next_obs, next_env_state, reward, done, _ = vmap_step(self.config["N_ENVS"])(rng, env_state, action)
+        next_obs, next_state, reward, done, _ = vmap_step(self.config["N_ENVS"])(rng, state, action)
         output = TimeStep(
             observation=next_obs,
             reward=reward,
             done=done,
-            env_state=next_env_state
+            state=next_state
         )
         return output
 
@@ -112,7 +112,7 @@ class DynaLossFn:
     config: dict # Containing GAMMA, TD_LAMBDA, ONLINE_COEFF, DYNA_COEFF, SIM_LENGTH, etc.
     simulation_policy_fn: callable # Function: (q_vals, rng) -> action
 
-    def calculate_loss(self, online_params, target_params, model_params, batch: Transition, initial_state: AgentState, rng: jax.Array) -> tuple[jax.Array, dict]:
+    def calculate_loss(self, online_params, target_params, model_params, batch: Transition, initial_rnn_state: AgentState, rng: jax.Array) -> tuple[jax.Array, dict]:
         # Input: batch is sequence [B, T, ...], initial states are [B, ...]
 
         # --- 1. Online Loss Component ---
@@ -180,9 +180,9 @@ def make_train(config, env, env_params):
     vmap_reset = lambda n_envs: lambda rng: jax.vmap(env.reset, in_axes=(0, None))(
         jax.random.split(rng, n_envs), env_params
     )
-    vmap_step = lambda n_envs: lambda rng, env_state, action: jax.vmap(
+    vmap_step = lambda n_envs: lambda rng, state, action: jax.vmap(
         env.step, in_axes=(0, 0, 0, None)
-    )(jax.random.split(rng, n_envs), env_state, action, env_params)
+    )(jax.random.split(rng, n_envs), state, action, env_params)
 
     def train(rng):
         # Initialize environment
@@ -199,15 +199,11 @@ def make_train(config, env, env_params):
             observation=dummy_obs,
             reward=jnp.array(0.0),
             done=jnp.array(0),
-            env_state=None
+            state=None
         )
         dummy_agent_state = AgentState(rnn_state=agent.initialize_carry((1,)))
         online_params = agent.init(init_rng, dummy_agent_state, dummy_timestep, rng)
         target_params = online_params
-        
-        # Initialize GroundTruthWorldModel, get initial (empty) params
-        world_model = GroundTruthWorldModel(env=env, env_params=env_params)
-        model_params = {}
         
         # Initialize Optimizer
         optimizer = optax.adam(learning_rate=config["LEARNING_RATE"])
@@ -253,8 +249,8 @@ def make_train(config, env, env_params):
             action = jnp.argmax(predictions.q_vals, axis=-1)
 
             # Get next timestep
-            obs, env_state, reward, done, _ = vmap_step(config["N_ENVS"])(rng, env_state, action)
-            next_timestep = TimeStep(observation=obs, reward=reward, done=done, env_state=env_state)
+            obs, state, reward, done, _ = vmap_step(config["N_ENVS"])(rng, state, action)
+            next_timestep = TimeStep(observation=obs, reward=reward, done=done, state=state)
 
             # Create transition
             transition = Transition(timestep=next_timestep, action=action, agent_state=next_agent_state)
