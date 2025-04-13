@@ -10,17 +10,34 @@ import functools
 import numpy as np
 from typing import Optional, Any
 from craftax.craftax_env import make_craftax_env_from_name
+from nicewebrl.nicejax import TimestepWrapper
 # Assume gymnax environment imports
 
 # --- Dataclasses ---
 
 # for single env, single timestep
-@struct.dataclass
-class TimeStep:
-    observation: jax.Array
-    reward: jax.Array
-    done: jax.Array
-    state: struct.PyTreeNode # Raw environment state
+class StepType(jnp.uint8):
+  FIRST: jax.Array = jnp.asarray(0, dtype=jnp.uint8)
+  MID: jax.Array = jnp.asarray(1, dtype=jnp.uint8)
+  LAST: jax.Array = jnp.asarray(2, dtype=jnp.uint8)
+
+
+class TimeStep(struct.PyTreeNode):
+  state: struct.PyTreeNode
+
+  step_type: StepType
+  reward: jax.Array
+  discount: jax.Array
+  observation: jax.Array
+
+  def first(self):
+    return self.step_type == StepType.FIRST
+
+  def mid(self):
+    return self.step_type == StepType.MID
+
+  def last(self):
+    return self.step_type == StepType.LAST
 
 @struct.dataclass
 class AgentState:
@@ -187,22 +204,21 @@ def make_train(config, env, env_params):
     def train(rng):
         # Initialize environment
         rng, _rng = jax.random.split(rng, 2)
-        init_obs, env_state = vmap_reset(config["N_ENVS"])(_rng)
+        init_timestep = vmap_reset(config["N_ENVS"])(_rng)
 
-        # Initialize RecurrentQNetwork (agent), get initial params
+        # Initialize DynaAgent
         agent = DynaAgent(
             config=config
         )
         rng, init_rng = jax.random.split(rng)
-        dummy_obs = jnp.zeros(env.observation_space(env_params).shape)
-        dummy_timestep = TimeStep(
-            observation=dummy_obs,
-            reward=jnp.array(0.0),
-            done=jnp.array(0),
-            state=None
+        init_x = (
+            jnp.zeros(
+                (1, config["NUM_ENVS"], *env.observation_space(env_params).shape)
+            ),
+            jnp.zeros((1, config["NUM_ENVS"])),
         )
-        dummy_agent_state = AgentState(rnn_state=agent.initialize_carry((1,)))
-        online_params = agent.init(init_rng, dummy_agent_state, dummy_timestep, rng)
+        init_agent_state = DynaAgent.initialize_carry(config["NUM_ENVS"], config["RNN_HIDDEN_DIM"])
+        online_params = agent.init(init_rng, init_agent_state, init_x)
         target_params = online_params
         
         # Initialize Optimizer
@@ -227,6 +243,16 @@ def make_train(config, env, env_params):
             sample_sequence_length=config["SEQUENCE_LENGTH"],
             period=config["PERIOD"],
         )
+
+        dummy_timestep = TimeStep(
+            observation=jnp.zeros((env.observation_space(env_params).shape[0],)),
+            reward=jnp.zeros((1,)),
+            done=jnp.zeros((1,)),
+            state=None,
+        )
+        dummy_agent_state = AgentState(
+            rnn_state=jnp.zeros((config["RNN_HIDDEN_DIM"],))
+        )
         dummy_transition = Transition(
             timestep=dummy_timestep,
             action=jnp.array(0),
@@ -237,20 +263,24 @@ def make_train(config, env, env_params):
         # Define actor_step function
         def actor_step(carry, unused):
             agent_state, timestep, rng = carry
-            rng, action_rng = jax.random.split(rng)
+            rng, _rng = jax.random.split(rng)
+
+            # Format inputs for apply fn
+            obs, discount = timestep.observation, timestep.discount
+            obs = obs[np.newaxis, :]
+            discount = discount[np.newaxis, :]
+            x = (obs, discount)
 
             # Get action from agent
-            predictions, next_agent_state = agent.apply(
+            next_agent_state, q_vals = agent.apply(
                 train_state.online_params,
                 agent_state,
-                timestep,
-                action_rng
+                x,
             )
-            action = jnp.argmax(predictions.q_vals, axis=-1)
+            action = jnp.argmax(q_vals, axis=-1)
 
             # Get next timestep
-            obs, state, reward, done, _ = vmap_step(config["N_ENVS"])(rng, state, action)
-            next_timestep = TimeStep(observation=obs, reward=reward, done=done, state=state)
+            next_timestep = vmap_step(config["N_ENVS"])(_rng, timestep.state, action)
 
             # Create transition
             transition = Transition(timestep=next_timestep, action=action, agent_state=next_agent_state)
@@ -264,15 +294,9 @@ def make_train(config, env, env_params):
         # Initialize DynaLossFn instance
         loss_fn = DynaLossFn(
             q_network=agent,
-            world_model=world_model,
             config=config,
             simulation_policy_fn=simulation_policy
         )
-        
-        # Initialize initial states
-        rng, env_rng = jax.random.split(rng)
-        initial_timestep = env.reset(env_rng, env_params)
-        initial_agent_state = AgentState(rnn_state=agent.initialize_carry((1,)))
 
         def _train_step(runner_state, unused):
             train_state, env_timestep, agent_state, buffer_state, rng = runner_state
@@ -299,8 +323,6 @@ def make_train(config, env, env_params):
             train_state = train_state.replace(timesteps=train_state.timesteps + config["TRAINING_INTERVAL"])
 
             # --- 3. Learning Update ---
-            model_params = {} # Empty for GroundTruthWorldModel
-
             def _learn_step(train_state, buffer_state, rng):
                 # Split RNG for sampling and loss calculation
                 rng, sample_rng, loss_rng = jax.random.split(rng, 3)
@@ -309,7 +331,7 @@ def make_train(config, env, env_params):
                 sampled_batch = buffer.sample(buffer_state, sample_rng)
 
                 # Get initial RNN states (online/target) from sampled_batch.experience.agent_state
-                initial_state = jax.tree.map(
+                init_state = jax.tree.map(
                     lambda x: x[:, 0],  # Take first element along time dimension
                     sampled_batch.experience.agent_state
                 )
@@ -322,9 +344,8 @@ def make_train(config, env, env_params):
                 (loss, aux_data), grads = jax.value_and_grad(loss_fn.calculate_loss, has_aux=True)(
                     train_state.online_params,
                     train_state.target_network_params,
-                    model_params,
                     sampled_batch,
-                    initial_state,
+                    init_state,
                     loss_rng
                 )
 
@@ -373,8 +394,8 @@ def make_train(config, env, env_params):
         # Initialize the initial states
         runner_state = (
             train_state,
-            initial_timestep,
-            initial_agent_state,
+            init_timestep,
+            init_agent_state,
             buffer_state,
             rng
         )
@@ -459,6 +480,7 @@ if __name__ == "__main__":
 
     # Create env and env_params
     env = make_craftax_env_from_name("Craftax-Symbolic-v1", auto_reset=True)
+    env = TimestepWrapper(env)
     env_params = env.default_params
 
     # Call make_train(config, env, env_params)
