@@ -479,7 +479,7 @@ if __name__ == "__main__":
     }
 
     # Create env and env_params
-    env = make_craftax_env_from_name("Craftax-Symbolic-v1", auto_reset=True)
+    env = make_craftax_env_from_name("Craftax-Symbolic-v1", auto_reset=False)
     env = TimestepWrapper(env)
     env_params = env.default_params
 
