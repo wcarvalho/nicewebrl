@@ -23,6 +23,7 @@ def get_user_lock():
     _user_locks[user_seed] = asyncio.Lock()
   return _user_locks[user_seed]
 
+
 async def toggle_fullscreen():
   logger.info("Toggling fullscreen")
   await ui.run_javascript(
@@ -37,6 +38,22 @@ async def toggle_fullscreen():
         }
         return true;
     })();
+    """,
+    timeout=10,
+  )
+
+
+async def prevent_default_spacebar_behavior(should_prevent: bool):
+  """
+  Set whether the spacebar's default behavior (fullscreen toggle) is prevented.
+  
+  Args:
+      should_prevent (bool): Whether to prevent the spacebar's default behavior.
+  """
+  logger.info(f"Setting spacebar behavior: should_prevent={should_prevent}")
+  await ui.run_javascript(
+    f"""
+    return preventDefaultSpacebarBehavior({str(should_prevent).lower()});
     """,
     timeout=10,
   )
