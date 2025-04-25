@@ -1,3 +1,4 @@
+from re import T
 import jax
 import jax.numpy as jnp
 import flax
@@ -74,6 +75,360 @@ class SimulationOutput:
   actions: jax.Array
   predictions: Optional[Predictions] = None
 
+
+# --- Helper Functions ---
+
+# --- Simulation policy ---
+def make_float(x):
+    return x.astype(jnp.float32)
+
+def add_time(v):
+    return jax.tree.map(lambda x: x[None], v)
+
+def repeat(x, N: int):
+  def identity(y, unused):
+    return y
+
+  return jax.vmap(identity, (None, 0), 0)(x, jnp.arange(N))
+
+def is_truncated(timestep):
+    non_terminal = timestep.discount
+
+    # either termination or truncation
+    is_last = make_float(timestep.last())
+
+    # non_terminal AND is_last confirms truncation
+    truncated = (non_terminal + is_last) > 1
+    return make_float(1 - truncated)
+
+def simulation_finished_mask(initial_mask, next_timesteps):
+  # get mask
+  non_terminal = next_timesteps.discount[1:]
+  # either termination or truncation
+  is_last_t = make_float(next_timesteps.last()[1:])
+
+  # time-step of termination and everything afterwards is masked out
+  term_cumsum_t = jnp.cumsum(is_last_t, 0)
+  loss_mask_t = make_float((term_cumsum_t + non_terminal) < 2)
+  return concat_start_sims(initial_mask, loss_mask_t)
+
+def concat_pytrees(tree1, tree2, **kwargs):
+    return jax.tree.map(lambda x, y: jnp.concatenate((x, y), **kwargs), tree1, tree2)
+
+def concat_first_rest(first, rest):
+    first = add_time(first)  # [N, ...] --> [1, N, ...]
+    # rest: [T, N, ...]
+    # output: [T+1, N, ...]
+    return jax.vmap(concat_pytrees, 1, 1)(first, rest)
+
+def concat_start_sims(start, simulations):
+    # concat where vmap over simulation dimension
+    # need this since have 1 start path, but multiple simulations
+    concat_ = lambda a, b: jnp.concatenate((a, b))
+    concat_ = jax.vmap(concat_, (None, 1), 1)
+    return jax.tree.map(concat_, start, simulations)
+
+# One greedy, others epsilon-greedy
+vals = np.logspace(num=256, start=1, stop=3, base=0.1)
+epsilons = jax.random.choice(rng, vals, shape=(num_simulations - 1,))
+epsilons = jnp.concatenate((jnp.array((0,)), epsilons))
+
+def simulation_policy(preds: Predictions, sim_rng: jax.Array):
+    q_values = preds.q_vals
+    assert q_values.shape[0] == epsilons.shape[0]
+    sim_rng = jax.random.split(sim_rng, q_values.shape[0])
+    return jax.vmap(base_agent.epsilon_greedy_act, in_axes=(0, 0, 0))(
+        q_values, epsilons, sim_rng
+    )
+
+@partial(jax.jit, static_argnums=(1,))
+def rolling_window(a, size: int):
+    """Create rolling windows of a specified size from an input array.
+
+    Rolls over the first dimension only, preserving other dimensions.
+
+    Args:
+        a (array-like): The input array of shape [T, ...]
+        size (int): The size of the rolling window
+
+    Returns:
+        Array of shape [T-size+1, size, ...]
+    """
+    # Get shape info
+    T = a.shape[0]  # length of first dimension
+    remaining_dims = a.shape[1:]  # all other dimensions
+
+    # Create start indices for the first dimension only
+    starts = jnp.arange(T - size + 1)
+
+    # Create slice for each start index, preserving other dimensions
+    def slice_at(start):
+        idx = (start,) + (0,) * len(remaining_dims)  # index tuple for all dims
+        size_tuple = (size,) + remaining_dims  # size tuple for all dims
+        return jax.lax.dynamic_slice(a, idx, size_tuple)
+
+    return jax.vmap(slice_at)(starts)
+
+def simulate_n_trajectories(
+  h_tm1: RnnState,
+  x_t: TimeStep,
+  rng: jax.random.PRNGKey,
+  agent: nn.Module,
+  params: Params,
+  policy_fn: SimPolicy = None,
+  num_steps: int = 5,
+  num_simulations: int = 5,
+):
+    """
+    Simulates multiple trajectories starting from a given state and RNN hidden state.
+    
+    This function first replicates the initial state and RNN state num_simulations times,
+    then applies the agent's policy to generate actions and simulate forward for num_steps.
+    Each simulation uses a different epsilon value for exploration (one greedy, others epsilon-greedy).
+    
+    Args:
+        h_tm1 (RnnState): Initial RNN hidden state [D]
+        x_t (TimeStep): Initial environment state containing (observation, discount, etc.)
+        rng (jax.random.PRNGKey): Random key for simulation
+        agent (nn.Module): Agent module containing apply() and apply_world_model() methods
+        params (Params): Parameters for the agent
+        policy_fn (SimPolicy, optional): Policy function that takes (predictions, rng) and returns actions
+        num_steps (int, optional): Number of forward simulation steps. Defaults to 5.
+        num_simulations (int, optional): Number of parallel simulations to run. Defaults to 5.
+    
+    Returns:
+        Tuple[TimeStep, SimulationOutput]:
+            - all_timesteps: Environment states for all timesteps [T+1, N, ...] where T is num_steps and N is num_simulations
+            - sim_outputs: SimulationOutput containing:
+                - actions: Selected actions for all timesteps [T+1, N, ...]
+                - predictions: Agent predictions for all timesteps [T+1, N, ...]
+    """
+
+    def initial_predictions(x, h_tm1):
+        # roll through RNN
+        # Format inputs for apply fn
+        obs, discount = x.observation, x.discount
+        obs = obs[np.newaxis, :]
+        discount = discount[np.newaxis, :]
+        resets = 1.0 - discount
+        x = (obs, resets)
+        h_t, preds = agent.apply(params, h_tm1, x)
+        
+        # remove time dim
+        h_t = jax.tree.map(lambda h: h.squeeze(0), h_t)
+        preds = jax.tree.map(lambda p: p.squeeze(0), preds)
+
+        return x, h_t, preds
+
+    # by giving state as input and returning, will
+    # return copies. 1 for each sampled action.
+    rng, rng_ = jax.random.split(rng)
+
+    # one for each simulation
+    # [N, ...]
+    # replace (x_t, task) with N-copies
+    x_t = jax.tree_map(lambda x: jnp.repeat(x[None], num_simulations, axis=0), x_t)
+    h_tm1 = jax.tree_map(lambda x: jnp.repeat(x[None], num_simulations, axis=0), h_tm1)
+    x_t, h_t, preds_t = jax.vmap(initial_predictions, in_axes=(0, 0))(x_t, h_tm1)
+
+    # choose epsilon-greedy action
+    a_t = policy_fn(preds_t, rng_)
+
+    def _single_model_step(carry, unused):
+        (timestep, agent_state, a, rng) = carry
+
+        ###########################
+        # 1. use state + action to predict next state
+        ###########################
+        rng, rng_ = jax.random.split(rng)
+
+        # apply world model to get next timestep
+        next_timestep = agent.apply_world_model(timestep.state, a, rng_)
+
+        # Format inputs for apply fn
+        obs, discount = next_timestep.observation, next_timestep.discount
+        obs = obs[np.newaxis, :]
+        discount = discount[np.newaxis, :]
+        resets = 1.0 - discount
+        x = (obs, resets)
+
+        # get next agent state and actions
+        next_agent_state, next_preds = agent.apply(params, agent_state, x)
+
+        # remove time dim
+        next_agent_state = jax.tree.map(lambda x: x.squeeze(0), next_agent_state)
+        next_preds = jax.tree.map(lambda x: x.squeeze(0), next_preds)
+
+        # get next actions
+        next_a = policy_fn(next_preds, rng_)
+
+        # format outputs
+        carry = (next_timestep, next_agent_state, next_a, rng)
+        sim_output = SimulationOutput(
+            predictions=next_preds,
+            actions=next_a,
+        )
+        return carry, (next_timestep, sim_output)
+
+    ################
+    # get simulation outputs
+    ################
+    initial_carry = (x_t, h_t, a_t, rng)
+    _, (next_timesteps, sim_outputs) = jax.lax.scan(
+        f=_single_model_step, init=initial_carry, xs=None, length=num_steps
+    )
+
+    # sim_outputs.predictions: [T, N, ...]
+    # concat [1, ...] with [N, T, ...]
+    sim_outputs = SimulationOutput(
+        predictions=concat_first_rest(preds_t, sim_outputs.predictions),
+        actions=concat_first_rest(a_t, sim_outputs.actions),
+    )
+    all_timesteps = concat_first_rest(x_t, next_timesteps)
+    return all_timesteps, sim_outputs
+
+# --- Logger Definition ---
+def learner_log_extra(
+  data: dict,
+  config: dict,
+):
+  def log_data(
+    key: str,
+    timesteps: TimeStep,
+    actions: np.array,
+    td_errors: np.array,
+    loss_mask: np.array,
+    q_values: np.array,
+    q_loss: np.array,
+    q_target: np.array,
+  ):
+    # Extract the relevant data
+    # only use data from batch dim = 0
+    # [T, B, ...] --> # [T, ...]
+
+    discounts = timesteps.discount
+    rewards = timesteps.reward
+    q_values_taken = rlax.batched_index(q_values, actions)
+
+    # Create a figure with three subplots
+    width = 0.3
+    nT = len(rewards)  # e.g. 20 --> 8
+    width = max(int(width * nT), 10)
+    fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=(width, 20))
+
+    # Plot rewards and q-values in the top subplot
+    def format(ax):
+      ax.set_xlabel("Time")
+      ax.grid(True)
+      ax.set_xticks(range(0, len(rewards), 1))
+
+    ax1.plot(rewards, label="Rewards")
+    ax1.plot(q_values_taken, label="Q-Values")
+    ax1.plot(q_target, label="Q-Targets")
+    ax1.set_title("Rewards and Q-Values")
+    format(ax1)
+    ax1.legend()
+
+    # Plot TD errors in the middle subplot
+    ax2.plot(td_errors)
+    format(ax2)
+    ax2.set_title("TD Errors")
+
+    # Plot Q-loss in the bottom subplot
+    ax3.plot(q_loss)
+    format(ax3)
+    ax3.set_title("Q-Loss")
+
+    # Plot episode quantities
+    is_last = timesteps.last()
+    ax4.plot(discounts, label="Discounts")
+    ax4.plot(loss_mask, label="mask")
+    ax4.plot(is_last, label="is_last")
+    format(ax4)
+    ax4.set_title("Episode markers")
+    ax4.legend()
+
+    if wandb.run is not None:
+      wandb.log({f"learner_example/{key}/q-values": wandb.Image(fig)})
+    plt.close(fig)
+
+    ##############################
+    # plot images of env
+    ##############################
+    # ------------
+    # get images
+    # ------------
+
+    # state_images = []
+    obs_images = []
+    max_len = min(config.get("MAX_EPISODE_LOG_LEN", 40), len(rewards))
+    for idx in range(max_len):
+      index = lambda y: jax.tree.map(lambda x: x[idx], y)
+      obs_image = render_fn(index(timesteps.state.env_state))
+      obs_images.append(obs_image)
+
+    # ------------
+    # plot
+    # ------------
+    actions_taken = [Action(a).name for a in actions]
+
+    def index(t, idx):
+      return jax.tree.map(lambda x: x[idx], t)
+
+    def panel_title_fn(timesteps, i):
+      title = f"t={i}"
+      title += f"\n{actions_taken[i]}"
+      if i >= len(timesteps.reward) - 1:
+        return title
+      title += (
+        f"\nr={timesteps.reward[i + 1]:.2f}, $\\gamma={timesteps.discount[i + 1]}$"
+      )
+
+      if hasattr(timesteps.observation, "achievements"):
+        achieved = timesteps.observation.achievements[i + 1]
+        if achieved.sum() > 1e-5:
+          achievement_idx = achieved.argmax()
+          try:
+            achievement = Achievement(achievement_idx).name
+            title += f"\n{achievement}"
+          except ValueError:
+            title += f"\nHealth?"
+      elif hasattr(timesteps.state.env_state, "current_goal"):
+        start_location = timesteps.state.env_state.start_position
+        goal = timesteps.state.env_state.current_goal[i]
+        goal_name = Achievement(int(goal)).name
+        title += f"\nstart={start_location}\ngoal={goal}\ngoal={goal_name}"
+
+      return title
+
+    fig = plot_frames(
+      timesteps=timesteps,
+      frames=obs_images,
+      panel_title_fn=panel_title_fn,
+      ncols=6,
+    )
+    if wandb.run is not None:
+      wandb.log({f"learner_example/{key}/trajectory": wandb.Image(fig)})
+    plt.close(fig)
+
+  def callback(d):
+    log_data(**d, key="dyna")
+
+  # this will be the value after update is applied
+  n_updates = data["n_updates"] + 1
+  is_log_time = n_updates % config["LEARNER_LOG_PERIOD"] == 0
+
+  if "dyna" in data:
+    # [Batch, Env Time, Sim Time, Num Simuations]
+    dyna_data = jax.tree.map(lambda x: x[0, 0, :, 0], data["dyna"])
+
+    jax.lax.cond(
+      is_log_time,
+      lambda d: jax.debug.callback(callback, d),
+      lambda d: None,
+      dyna_data,
+    )
+
 # --- Network Definition ---
 # Based on ScannedRNN from PureJaxRL
 class DynaAgent(nn.Module):
@@ -116,54 +471,21 @@ class DynaAgent(nn.Module):
         Simulates one step using the 'world model' (ground truth env).
         """
         # vmap the step function
-        vmap_step = lambda n_envs: lambda rng, state, action: jax.vmap(
+        vmap_step = lambda num_envs: lambda rng, state, action: jax.vmap(
             self.env.step, in_axes=(0, 0, 0, None)
-        )(jax.random.split(rng, n_envs), state, action, self.env_params)
+        )(jax.random.split(rng, num_envs), state, action, self.env_params)
         
         # Implement ground truth env.step call
-        # TODO: fix outputs to be TimeStep object
-        next_state = vmap_step(self.config["N_ENVS"])(rng, state, action)
+        next_state = vmap_step(self.config["NUM_ENVS"])(rng, state, action)
         return next_state
 
 # --- Loss Function ---
-
-def make_float(x):
-  return x.astype(jnp.float32)
-
-def add_time(v):
-  return jax.tree.map(lambda x: x[None], v)
-
-def is_truncated(timestep):
-  non_terminal = timestep.discount
-
-  # either termination or truncation
-  is_last = make_float(timestep.last())
-
-  # non_terminal AND is_last confirms truncation
-  truncated = (non_terminal + is_last) > 1
-  return make_float(1 - truncated)
-
-def concat_pytrees(tree1, tree2, **kwargs):
-  return jax.tree.map(lambda x, y: jnp.concatenate((x, y), **kwargs), tree1, tree2)
-
-def concat_first_rest(first, rest):
-  first = add_time(first)  # [N, ...] --> [1, N, ...]
-  # rest: [T, N, ...]
-  # output: [T+1, N, ...]
-  return jax.vmap(concat_pytrees, 1, 1)(first, rest)
-
-def concat_start_sims(start, simulations):
-  # concat where vmap over simulation dimension
-  # need this since have 1 start path, but multiple simulations
-  concat_ = lambda a, b: jnp.concatenate((a, b))
-  concat_ = jax.vmap(concat_, (None, 1), 1)
-  return jax.tree.map(concat_, start, simulations)
 
 @struct.dataclass
 class DynaLossFn:
     agent: DynaAgent
     config: dict # Containing GAMMA, TD_LAMBDA, ONLINE_COEFF, DYNA_COEFF, SIM_LENGTH, etc.
-    simulation_policy_fn: callable # Function: (q_vals, rng) -> actionp
+    simulation_policy: callable # Function: (q_vals, rng) -> actionp
 
     def batch_loss(
         self,
@@ -295,8 +617,8 @@ class DynaLossFn:
         # Unroll online & target Q-networks on the REAL batch data
         resets = 1.0 - non_terminal # [T, B]
         xs = (obs, resets)
-        final_online_state, online_preds = self.agent.apply(online_params, init_state, xs)
-        final_target_state, target_preds = self.agent.apply(target_params, init_state, xs)
+        _, online_preds = self.agent.apply(online_params, init_state, xs)
+        _, target_preds = self.agent.apply(target_params, init_state, xs)
 
         # Calculate TD-Lambda loss L_online based on online_preds, target_preds, batch.action, batch.timestep.reward, batch.timestep.discount
         all_metrics = {}
@@ -343,14 +665,13 @@ class DynaLossFn:
             # will use time-step + previous rnn-state to simulate
             # next state at each time-step and compute predictions
 
-            # example code from Wilka
             remove_last = lambda x: jax.tree.map(lambda y: y[:-1], x)
             h_tm1_online = concat_first_rest(init_state, remove_last(online_preds.state))
             h_tm1_target = concat_first_rest(init_state, remove_last(target_preds.state))
             x_t = timestep
 
             dyna_loss_fn = functools.partial(
-                self.dyna_loss_fn, params=params, target_params=target_params
+                self.dyna_loss_fn, params=online_params, target_params=target_params
             )
 
             # vmap over batch
@@ -374,12 +695,10 @@ class DynaLossFn:
         # TODO: Add importance sampling weights if using prioritized replay
         total_loss = self.config["ONLINE_COEFF"] * jnp.mean(L_online) + self.config["DYNA_COEFF"] * L_dyna
 
-        # --- 4. Prepare Aux Data ---
-        # TODO: Package metrics (L_online, L_dyna, etc.)
-        # TODO: Package priorities (based on TD_online)
-        aux_data = {"metrics": {...}, "priorities": ...}
+        # --- 4. Log metrics ---
+        self.logger.learner_log_extra(all_log_info)
 
-        return total_loss, aux_data
+        return td_error, total_loss, all_metrics
     
     # TODO: Modify dyna loss fn for my agent class
     def dyna_loss_fn(
@@ -400,8 +719,8 @@ class DynaLossFn:
 
         Args:
             x_t (TimeStep): [D], timestep at t
-            h_tm1 (jax.Array): [D], rnn-state at t-1
-            h_tm1_target (jax.Array): [D], rnn-state at t-1 from target network
+            h_online (jax.Array): [D], rnn-state at t-1
+            h_target (jax.Array): [D], rnn-state at t-1 from target network
         """
         window_size = self.config["WINDOW_SIZE"]
         window_size = min(window_size, len(actions))
@@ -426,7 +745,7 @@ class DynaLossFn:
         h_target = jax.tree.map(roll, h_target)
         loss_mask = jax.tree.map(roll, loss_mask)
 
-        def dyna_loss_fn_(t, a, h_on, h_tar, l_mask, key):
+        def _dyna_loss_fn(t, a, h_on, h_tar, l_mask, key):
             """
             Args:
                 t (jax.Array): [window_size, ...]
@@ -442,54 +761,29 @@ class DynaLossFn:
                 x_t=jax.tree.map(lambda x: x[-1], t),
                 rng=key_,
             )
-            if self.backtracking:
-                # we replace last, because last action from data
-                # is different than action from simulation
-                # [window_size + sim_length, num_sims, ...]
-                all_but_last = lambda y: jax.tree.map(lambda x: x[:-1], y)
-                all_t = concat_start_sims(all_but_last(t), next_t)
-                all_a = concat_start_sims(all_but_last(a), sim_outputs_t.actions)
-                # start at beginning of experience data
-                start_index = 0
-            else:
-                all_t = next_t
-                all_a = sim_outputs_t.actions
-                # start at last timestep before simulation
-                start_index = -1
+
+            # we replace last, because last action from data
+            # is different than action from simulation
+            # [window_size + sim_length, num_sims, ...]
+            all_but_last = lambda y: jax.tree.map(lambda x: x[:-1], y)
+            all_t = concat_start_sims(all_but_last(t), next_t)
+            all_a = concat_start_sims(all_but_last(a), sim_outputs_t.actions)
 
             # NOTE: we're recomputing RNN but easier to read this way...
-            # TODO: reuse RNN online param computations for speed (probably not worth it)
-            key, key_ = jax.random.split(key)
-            h_htm1 = jax.tree.map(lambda x: x[start_index], h_on)
-            h_htm1 = repeat(h_htm1, self.num_simulations)
-            online_preds = apply_rnn_and_q(
-                h_tm1=h_htm1,
-                timesteps=all_t,
-                task=None,
-                rng=key_,
-                network=self.network,
-                params=params,
-                q_fn=self.network.reg_q_fn,
-            )
+            resets = 1.0 - all_t.discount
+            xs = (all_t.observation, resets)
 
-            key, key_ = jax.random.split(key)
-            h_htm1 = jax.tree.map(lambda x: x[start_index], h_tar)
-            h_htm1 = repeat(h_htm1, self.num_simulations)
-            target_preds = apply_rnn_and_q(
-                h_tm1=h_htm1,
-                timesteps=all_t,
-                task=None,
-                rng=key_,
-                network=self.network,
-                params=target_params,
-                q_fn=self.network.reg_q_fn,
-            )
+            h_on_init = jax.tree.map(lambda x: x[0], h_on)
+            h_on_init = repeat(h_on_init, self.num_simulations)
+            h_tar_init = jax.tree.map(lambda x: x[0], h_tar)
+            h_tar_init = repeat(h_tar_init, self.num_simulations)
+
+            _, online_preds = self.agent.apply(online_params, h_on_init, xs)
+            _, target_preds = self.agent.apply(target_params, h_tar_init, xs)
 
             all_t_mask = simulation_finished_mask(l_mask, next_t)
-            if not self.backtracking:
-                all_t_mask = all_t_mask[-self.simulation_length-1:]
 
-            batch_td_error, batch_loss_mean, metrics, log_info = self.loss_fn(
+            batch_td_error, batch_loss_mean, metrics, log_info = self.batch_loss(
                 timestep=all_t,
                 online_preds=online_preds,
                 target_preds=target_preds,
@@ -505,7 +799,7 @@ class DynaLossFn:
         # TD ERROR: [window_size, T + sim_length, num_sim]
         # Loss: [window_size, num_sim, ...]
         if self.combine_real_sim:
-            batch_td_error, batch_loss_mean, metrics, log_info = jax.vmap(dyna_loss_fn_)(
+            batch_td_error, batch_loss_mean, metrics, log_info = jax.vmap(_dyna_loss_fn)(
                 timesteps,  # [T, W, ...]
                 actions,  # [T, W]
                 h_online,  # [T, W, D]
@@ -513,9 +807,10 @@ class DynaLossFn:
                 loss_mask,  # [T, W]
                 jax.random.split(rng, len(actions)),  # [W, 2]
             )
+        # NOTE: Why would we vmap over the time dimension here??
         else:
             batch_td_error, batch_loss_mean, metrics, log_info = jax.vmap(
-                dyna_loss_fn_, (1, 1, 1, 1, 1, 0), 0
+                _dyna_loss_fn, (1, 1, 1, 1, 1, 0), 0
             )(
                 timesteps,  # [T, W, ...]
                 actions,  # [T, W]
@@ -526,182 +821,31 @@ class DynaLossFn:
             )
 
         # figuring out how to incorporate windows into TD error is annoying so punting
-        # TODO: incorporate windowed overlappping TDs into TD error
+        # NOTE: Can you explain this comment?
         batch_td_error = batch_td_error.mean()  # [num_sim]
         batch_loss_mean = batch_loss_mean.mean()  # []
 
         return batch_td_error, batch_loss_mean, metrics, log_info
 
-# --- Simulation policy ---
-# One greedy, others epsilon-greedy
-vals = np.logspace(num=256, start=1, stop=3, base=0.1)
-epsilons = jax.random.choice(rng, vals, shape=(num_simulations - 1,))
-epsilons = jnp.concatenate((jnp.array((0,)), epsilons))
-
-def simulation_policy(preds: Predictions, sim_rng: jax.Array):
-    q_values = preds.q_vals
-    assert q_values.shape[0] == epsilons.shape[0]
-    sim_rng = jax.random.split(sim_rng, q_values.shape[0])
-    return jax.vmap(base_agent.epsilon_greedy_act, in_axes=(0, 0, 0))(
-        q_values, epsilons, sim_rng
-    )
-
-# --- Helper Functions ---
-
-def simulate_n_trajectories(
-  h_tm1: RnnState,
-  x_t: TimeStep,
-  rng: jax.random.PRNGKey,
-  agent: nn.Module,
-  params: Params,
-  policy_fn: SimPolicy = None,
-  num_steps: int = 5,
-  num_simulations: int = 5,
-):
-    """
-
-    return predictions and actions for every time-step including the current one.
-
-    This first applies the model to the current time-step and then simulates T more time-steps.
-    Output is num_steps+1.
-
-    Args:
-        x_t (TimeStep): [D]
-        h_tm1 (RnnState): [D]
-        rng (jax.random.PRNGKey): _description_
-        agent (nn.Module): _description_
-        params (Params): _description_
-        num_steps (int, optional): _description_. Defaults to 5.
-        num_simulations (int, optional): _description_. Defaults to 5.
-
-    Returns:
-        _type_: _description_
-    """
-
-    def initial_predictions(x, h_tm1):
-        # roll through RNN
-        # Format inputs for apply fn
-        obs, discount = x.observation, x.discount
-        obs = obs[np.newaxis, :]
-        discount = discount[np.newaxis, :]
-        resets = 1.0 - discount
-        x = (obs, resets)
-        h_t, preds = agent.apply(params, h_tm1, x)
-        
-        # remove time dim
-        h_t = jax.tree.map(lambda h: h.squeeze(0), h_t)
-        preds = jax.tree.map(lambda p: p.squeeze(0), preds)
-
-        return x, h_t, preds
-
-    # by giving state as input and returning, will
-    # return copies. 1 for each sampled action.
-    rng, rng_ = jax.random.split(rng)
-
-    # one for each simulation
-    # [N, ...]
-    # replace (x_t, task) with N-copies
-    x_t = jax.tree_map(lambda x: jnp.repeat(x[None], num_simulations, axis=0), x_t)
-    h_tm1 = jax.tree_map(lambda x: jnp.repeat(x[None], num_simulations, axis=0), h_tm1)
-    x_t, h_t, preds_t = jax.vmap(initial_predictions, in_axes=(0, 0))(x_t, h_tm1)
-
-    # choose epsilon-greedy action
-    a_t = policy_fn(preds_t, rng_)
-
-    def _single_model_step(carry, unused):
-        (timestep, agent_state, a, rng) = carry
-
-        ###########################
-        # 1. use state + action to predict next state
-        ###########################
-        rng, rng_ = jax.random.split(rng)
-
-        # apply world model to get next timestep
-        next_timestep = agent.apply_world_model(timestep.state, a, rng_)
-
-        # Format inputs for apply fn
-        obs, discount = next_timestep.observation, next_timestep.discount
-        obs = obs[np.newaxis, :]
-        discount = discount[np.newaxis, :]
-        resets = 1.0 - discount
-        x = (obs, resets)
-
-        # get next agent state and actions
-        next_agent_state, next_preds = agent.apply(params, agent_state, x)
-
-        # remove time dim
-        next_agent_state = jax.tree.map(lambda x: x.squeeze(0), next_agent_state)
-        next_preds = jax.tree.map(lambda x: x.squeeze(0), next_preds)
-
-        # get next actions
-        next_a = policy_fn(next_preds, rng_)
-
-        # format outputs
-        carry = (next_timestep, next_agent_state, next_a, rng)
-        sim_output = SimulationOutput(
-            predictions=next_preds,
-            actions=next_a,
-        )
-        return carry, (next_timestep, sim_output)
-
-    ################
-    # get simulation outputs
-    ################
-    initial_carry = (x_t, h_t, a_t, rng)
-    _, (next_timesteps, sim_outputs) = jax.lax.scan(
-        f=_single_model_step, init=initial_carry, xs=None, length=num_steps
-    )
-
-    # sim_outputs.predictions: [T, N, ...]
-    # concat [1, ...] with [N, T, ...]
-    sim_outputs = SimulationOutput(
-        predictions=concat_first_rest(preds_t, sim_outputs.predictions),
-        actions=concat_first_rest(a_t, sim_outputs.actions),
-    )
-    all_timesteps = concat_first_rest(x_t, next_timesteps)
-    return all_timesteps, sim_outputs
-
-def simulate_rollout(world_model: WorldModel, model_params, model_state: WorldModelState,
-                     q_network: RecurrentQNetwork, q_params,
-                     initial_sim_state_info: WorldModel.StateInfo, initial_rnn_state: AgentState,
-                     sim_length: int, rng: jax.Array, simulation_policy_fn: callable) -> Transition:
-    # Uses jax.lax.scan to perform the rollout
-    # Inputs: world model, q-network (for policy), initial states, length, policy
-    # Output: A Transition object containing sequences of (sim_obs, sim_reward, sim_done, sim_action, sim_rnn_state)
-    def scan_step(carry, _):
-        # TODO: Unpack carry (current_sim_state_info, current_rnn_state, current_model_state, rng)
-        # TODO: Get Q-values using q_network(current_rnn_state, current_sim_state_info.observation) (requires adapting __call__ or timestep creation)
-        # TODO: Choose action using simulation_policy_fn(q_vals, rng)
-        # TODO: Predict next step using world_model.apply_model(...) -> next_wm_output, next_model_state
-        # TODO: Update RNN state using q_network single step logic based on next_wm_output.next_observation -> next_rnn_state
-        # TODO: Prepare next_sim_state_info
-        # TODO: Assemble output tuple (sim_obs, sim_reward, sim_done, sim_action, sim_rnn_state)
-        # TODO: Return next carry and output tuple
-        pass
-    # TODO: Define initial carry
-    # TODO: Call jax.lax.scan(scan_step, initial_carry, None, length=sim_length)
-    # TODO: Package scan outputs into a Transition object (or similar structure)
-    pass
-
-def simulation_policy_fn(q_vals, rng, epsilon):
-    # Example: Epsilon-greedy
-    # TODO: Implement epsilon-greedy logic based on q_vals and epsilon
-    pass
 
 # --- Training Loop Structure (Conceptual) ---
 
 def make_train(config, env, env_params):
-    vmap_reset = lambda n_envs: lambda rng: jax.vmap(env.reset, in_axes=(0, None))(
-        jax.random.split(rng, n_envs), env_params
+    vmap_reset = lambda num_envs: lambda rng: jax.vmap(env.reset, in_axes=(0, None))(
+        jax.random.split(rng, num_envs), env_params
     )
-    vmap_step = lambda n_envs: lambda rng, state, action: jax.vmap(
+    vmap_step = lambda num_envs: lambda rng, state, action: jax.vmap(
         env.step, in_axes=(0, 0, 0, None)
-    )(jax.random.split(rng, n_envs), state, action, env_params)
+    )(jax.random.split(rng, num_envs), state, action, env_params)
+
+    NUM_UPDATES = int(
+        config["TOTAL_TIMESTEPS"] // config["NUM_ENVS"] // config["TRAINING_INTERVAL"]
+    )
 
     def train(rng):
         # Initialize environment
         rng, _rng = jax.random.split(rng, 2)
-        init_timestep = vmap_reset(config["N_ENVS"])(_rng)
+        init_timestep = vmap_reset(config["NUM_ENVS"])(_rng)
 
         # Initialize DynaAgent
         agent = DynaAgent(
@@ -735,8 +879,8 @@ def make_train(config, env, env_params):
         buffer = fbx.make_trajectory_buffer(
             max_length_time_axis=config["BUFFER_SIZE"],
             min_length_time_axis=config["MIN_BUFFER_SIZE"],
-            sample_batch_size=config["N_ENVS"],
-            add_batch_size=config["N_ENVS"],
+            sample_batch_size=config["NUM_ENVS"],
+            add_batch_size=config["NUM_ENVS"],
             sample_sequence_length=config["SEQUENCE_LENGTH"],
             period=config["PERIOD"],
         )
@@ -782,16 +926,12 @@ def make_train(config, env, env_params):
             action = action.squeeze(axis=0)
 
             # Get next timestep
-            next_timestep = vmap_step(config["N_ENVS"])(_rng, timestep.state, action)
+            next_timestep = vmap_step(config["NUM_ENVS"])(_rng, timestep.state, action)
 
             # Create transition
             transition = Transition(timestep=next_timestep, action=action, agent_state=next_agent_state)
 
             return (next_agent_state, next_timestep, rng), transition
-        
-        # Define simulation_policy function
-        def simulation_policy(q_vals, rng):
-            return jnp.argmax(q_vals)
         
         # Initialize DynaLossFn instance
         loss_fn = DynaLossFn(
@@ -903,7 +1043,7 @@ def make_train(config, env, env_params):
         )
 
         # Run the main loop
-        runner_state, _ = jax.lax.scan(_train_step, runner_state, None, config["NUM_UPDATES"])
+        runner_state, _ = jax.lax.scan(_train_step, runner_state, None, NUM_UPDATES)
 
         # Return results
         return runner_state
@@ -916,23 +1056,22 @@ if __name__ == "__main__":
     config = {
         # --- Environment Settings ---
         "ENV_NAME": "Craftax-Symbolic-v1", # Example, adjust as needed
-        "N_ENVS": 4,  # Number of parallel environments (PureJaxRL DQN used 10, can increase)
+        "NUM_ENVS": 4,  # Number of parallel environments (PureJaxRL DQN used 10, can increase)
 
         # --- Training Loop Settings ---
-        "TOTAL_TIMESTEPS": 5e5,  # Total environment steps (PureJaxRL DQN used 5e5)
+        "TOTAL_TIMESTEPS": 1e6,  # Total environment steps
         "TRAINING_INTERVAL": 1,   # How many env steps per actor sequence collection (R2D2/ACME often use 1)
-                                # NOTE: If 1, buffer adds [B=N_ENVS, T=1]. If >1, adds [B=N_ENVS, T=INTERVAL]
-        "LEARNING_STARTS": 10000, # Timesteps before learning begins (PureJaxRL DQN used 10k)
+        "LEARNING_STARTS": 0, # Timesteps before learning begins
         "TARGET_UPDATE_INTERVAL": 250, # How many LEARNER UPDATES between target network syncs (R2D2 uses ~2500 steps)
 
         # --- Network Settings ---
         "RNN_HIDDEN_DIM": 256,     # Size of RNN hidden state (Dyna code used 256)
-        "MLP_HIDDEN_DIM": 128,     # Hidden dim for observation encoder MLP
-        "NUM_MLP_LAYERS": 1,       # Layers for observation encoder MLP
-        "Q_HIDDEN_DIM": 512,       # Hidden dim for Q-head MLP (Dyna code used 512)
-        "NUM_Q_LAYERS": 1,         # Layers for Q-head MLP (Dyna code used 1)
-        "ACTIVATION": "relu",      # Activation function
-        "USE_BIAS": True,          # Whether to use bias in Dense layers
+        # "MLP_HIDDEN_DIM": 128,     # Hidden dim for observation encoder MLP
+        # "NUM_MLP_LAYERS": 1,       # Layers for observation encoder MLP
+        # "Q_HIDDEN_DIM": 512,       # Hidden dim for Q-head MLP (Dyna code used 512)
+        # "NUM_Q_LAYERS": 1,         # Layers for Q-head MLP (Dyna code used 1)
+        # "ACTIVATION": "relu",      # Activation function
+        # "USE_BIAS": True,          # Whether to use bias in Dense layers
 
         # --- Optimizer Settings ---
         "LEARNING_RATE": 2.5e-4,   # Learning rate (PureJaxRL DQN used 2.5e-4)
@@ -945,23 +1084,23 @@ if __name__ == "__main__":
         "BUFFER_BATCH_SIZE": 64,   # Batch size sampled from buffer for learning (e.g., 32, 64)
         "SEQUENCE_LENGTH": 40,     # Length of sequences sampled from buffer (R2D2 uses ~80)
         "PERIOD": 1,               # Store sequences overlapping by N-1 steps (1 is standard)
-        "BURN_IN_LENGTH": 4,       # Number of steps to burn-in RNN state (0 disables, R2D2 uses ~half sequence length)
+        # "BURN_IN_LENGTH": 4,       # Number of steps to burn-in RNN state (0 disables, R2D2 uses ~half sequence length)
 
         # --- Prioritized Replay Settings ---
-        "PRIORITY_EXPONENT": 0.9,            # Alpha exponent for PER (fbx default 0.9)
-        "IMPORTANCE_SAMPLING_EXPONENT": 0.6, # Beta exponent for PER IS weights (DynaLossFn default 0.6)
-        "MAX_PRIORITY_WEIGHT": 0.9,          # Mixture coefficient for max/mean priority (DynaLossFn default 0.9)
+        # "PRIORITY_EXPONENT": 0.9,            # Alpha exponent for PER (fbx default 0.9)
+        # "IMPORTANCE_SAMPLING_EXPONENT": 0.6, # Beta exponent for PER IS weights (DynaLossFn default 0.6)
+        # "MAX_PRIORITY_WEIGHT": 0.9,          # Mixture coefficient for max/mean priority (DynaLossFn default 0.9)
 
         # --- Loss Function Settings ---
         "GAMMA": 0.99,             # Discount factor
-        "TD_LAMBDA": 0.9,         # TD-Lambda parameter (R2D2 uses 0.95)
-        "STEP_COST": 0.001,          # Optional cost added per step (DynaLossFn default 0.0)
+        "TD_LAMBDA": 0.9,          # TD-Lambda parameter
+        "STEP_COST": 0.0,          # Optional cost added per step (DynaLossFn default 0.0)
         "ONLINE_COEFF": 1.0,       # Weight for the loss on real data
         "DYNA_COEFF": 1.0,         # Weight for the loss on simulated data (DynaLossFn default 1.0)
 
         # --- Dyna Simulation Settings ---
-        "NUM_SIMULATIONS": 2,      # Number of parallel simulations per starting state (DynaLossFn default 2)
-        "SIMULATION_LENGTH": 5,    # Length of each simulated rollout (DynaLossFn default 5)
+        "NUM_SIMULATIONS": 4,      # Number of parallel simulations per starting state (DynaLossFn default 2)
+        "SIMULATION_LENGTH": 20,    # Length of each simulated rollout (DynaLossFn default 5)
         "WINDOW_SIZE": 20,         # Size of the rolling window on real data to trigger simulations (DynaLossFn default 20)
         "SIM_EPSILON_SETTING": 1,  # How simulation epsilon is chosen (1: ACME logspace, 2: 0.9-0.1 logspace, 3: fixed)
         "SIM_EPSILON": 0.1,        # Epsilon value if SIM_EPSILON_SETTING is 3
@@ -969,15 +1108,13 @@ if __name__ == "__main__":
         # --- Actor Settings (Exploration) ---
         # Choose one exploration strategy
         "FIXED_EPSILON": 0,        # 0: Linear Decay, 1: Fixed Logspace (ACME), 2: Fixed Logspace (0.9-0.1)
-        "EPSILON_START": 1.0,      # Starting epsilon for linear decay
-        "EPSILON_FINISH": 0.05,    # Final epsilon for linear decay
-        "EPSILON_ANNEAL_TIME": 25e4,# Timesteps to anneal epsilon over (PureJaxRL DQN used 25e4)
+        # "EPSILON_START": 1.0,      # Starting epsilon for linear decay
+        # "EPSILON_FINISH": 0.05,    # Final epsilon for linear decay
+        "EPSILON_ANNEAL_TIME": 5e5,# Timesteps to anneal epsilon over (PureJaxRL DQN used 25e4)
 
         # --- Miscellaneous ---
         "SEED": 42,
         "LEARNER_LOG_PERIOD": 100,  # How many LEARNER UPDATES between logging losses/metrics
-        "EVAL_LOG_PERIOD": 100,     # How many LEARNER UPDATES between running evaluation episodes
-        "GRADIENT_LOG_PERIOD": 500, # How many LEARNER UPDATES between logging gradients (0 to disable)
     }
 
     # Create env and env_params
