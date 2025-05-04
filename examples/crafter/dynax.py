@@ -404,6 +404,45 @@ def learner_log_extra(
     )
 
 # --- Network Definition ---
+
+# Encoder
+class Encoder(nn.Module):
+  """
+  Simple observation encoder for Craftax-like environments.
+
+  Assumes:
+  - Input 'obs' is the image tensor directly.
+  - No normalization is applied.
+  - ReLU activation is used between hidden layers.
+  - Only processes the image input (no achievable/action).
+  """
+
+  hidden_dim: int = 512  # Dimension of the output features and hidden layers
+  num_layers: int = 1    # Total number of Dense layers (must be >= 1)
+  use_bias: bool = True    # Whether Dense layers should use bias terms
+
+  @nn.compact
+  def __call__(self, obs: jnp.ndarray):
+    """
+    Processes an observation (assumed to be image data) into features.
+
+    Args:
+      obs: The observation data, assumed to be the image tensor.
+
+    Returns:
+      A tensor representing the encoded features of the image.
+    """
+    assert self.num_layers >= 1, "num_layers must be at least 1"
+
+    x = obs
+    for i in range(self.num_layers - 1):
+      x = nn.Dense(features=self.hidden_dim, use_bias=self.use_bias, name=f"hidden_{i}")(x)
+      x = nn.relu(x)
+    output_features = nn.Dense(features=self.hidden_dim, use_bias=self.use_bias, name="output_layer")(x)
+
+    return output_features
+
+# Agent
 # Based on ScannedRNN from PureJaxRL
 class DynaAgent(nn.Module):
     config: dict
@@ -1011,12 +1050,12 @@ if __name__ == "__main__":
 
         # --- Network Settings ---
         "RNN_HIDDEN_DIM": 256,     # Size of RNN hidden state (Dyna code used 256)
-        # "MLP_HIDDEN_DIM": 128,     # Hidden dim for observation encoder MLP
-        # "NUM_MLP_LAYERS": 1,       # Layers for observation encoder MLP
+        "MLP_HIDDEN_DIM": 512,     # Hidden dim for observation encoder MLP
+        "NUM_MLP_LAYERS": 1,       # Layers for observation encoder MLP
         # "Q_HIDDEN_DIM": 512,       # Hidden dim for Q-head MLP (Dyna code used 512)
         # "NUM_Q_LAYERS": 1,         # Layers for Q-head MLP (Dyna code used 1)
-        # "ACTIVATION": "relu",      # Activation function
-        # "USE_BIAS": True,          # Whether to use bias in Dense layers
+        "ACTIVATION": "relu",      # Activation function
+        "USE_BIAS": True,          # Whether to use bias in Dense layers
 
         # --- Optimizer Settings ---
         "LEARNING_RATE": 2.5e-4,   # Learning rate (PureJaxRL DQN used 2.5e-4)
