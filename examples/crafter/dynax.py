@@ -13,6 +13,7 @@ from typing import Optional, Any
 from craftax.craftax_env import make_craftax_env_from_name
 from nicewebrl.nicejax import TimestepWrapper
 from jaxneurorl import losses
+from jaxneurorl.agents import qlearning as base_agent
 import rlax
 
 # Assume gymnax environment imports
@@ -128,6 +129,7 @@ def concat_start_sims(start, simulations):
     concat_ = jax.vmap(concat_, (None, 1), 1)
     return jax.tree.map(concat_, start, simulations)
 
+# SIMULATION POLICY
 # One greedy, others epsilon-greedy
 vals = np.logspace(num=256, start=1, stop=3, base=0.1)
 epsilons = jax.random.choice(rng, vals, shape=(num_simulations - 1,))
@@ -141,41 +143,13 @@ def simulation_policy(preds: Predictions, sim_rng: jax.Array):
         q_values, epsilons, sim_rng
     )
 
-@partial(jax.jit, static_argnums=(1,))
-def rolling_window(a, size: int):
-    """Create rolling windows of a specified size from an input array.
-
-    Rolls over the first dimension only, preserving other dimensions.
-
-    Args:
-        a (array-like): The input array of shape [T, ...]
-        size (int): The size of the rolling window
-
-    Returns:
-        Array of shape [T-size+1, size, ...]
-    """
-    # Get shape info
-    T = a.shape[0]  # length of first dimension
-    remaining_dims = a.shape[1:]  # all other dimensions
-
-    # Create start indices for the first dimension only
-    starts = jnp.arange(T - size + 1)
-
-    # Create slice for each start index, preserving other dimensions
-    def slice_at(start):
-        idx = (start,) + (0,) * len(remaining_dims)  # index tuple for all dims
-        size_tuple = (size,) + remaining_dims  # size tuple for all dims
-        return jax.lax.dynamic_slice(a, idx, size_tuple)
-
-    return jax.vmap(slice_at)(starts)
-
 def simulate_n_trajectories(
   h_tm1: RnnState,
   x_t: TimeStep,
   rng: jax.random.PRNGKey,
   agent: nn.Module,
   params: Params,
-  policy_fn: SimPolicy = None,
+  policy_fn: callable = None,
   num_steps: int = 5,
   num_simulations: int = 5,
 ):
@@ -654,7 +628,7 @@ class DynaLossFn:
         # --- 2. Dyna Loss Component ---
         L_dyna = 0.0
         if self.config["DYNA_COEFF"] > 0:
-            # TODO: Implement Dyna Loss Calculation (potentially in a helper method)
+            # Dyna Loss Calculation
             #   - Select starting points (s_t, h_t) from the real batch sequence (e.g., via windows or sampling)
             #   - For each starting point:
             #       - Call simulate_rollout(world_model, model_params, q_network, online_params, s_t, h_t, ...) -> simulated_trajectory
@@ -700,7 +674,6 @@ class DynaLossFn:
 
         return td_error, total_loss, all_metrics
     
-    # TODO: Modify dyna loss fn for my agent class
     def dyna_loss_fn(
         self,
         timesteps: TimeStep,
@@ -725,7 +698,6 @@ class DynaLossFn:
         window_size = self.config["WINDOW_SIZE"]
         window_size = min(window_size, len(actions))
         window_size = max(window_size, 1)
-        roll = partial(rolling_window, size=window_size)
         simulate = partial(
             simulate_n_trajectories,
             network=self.agent,
@@ -734,16 +706,6 @@ class DynaLossFn:
             num_simulations=self.config["NUM_SIMULATIONS"],
             policy_fn=self.simulation_policy,
         )
-
-        # first do a rollowing window
-        # T' = T-window_size+1
-        # K = window_size
-        # [T, ...] --> [T', K, ...]
-        actions = jax.tree.map(roll, actions)
-        timesteps = jax.tree.map(roll, timesteps)
-        h_online = jax.tree.map(roll, h_online)
-        h_target = jax.tree.map(roll, h_target)
-        loss_mask = jax.tree.map(roll, loss_mask)
 
         def _dyna_loss_fn(t, a, h_on, h_tar, l_mask, key):
             """
@@ -795,33 +757,17 @@ class DynaLossFn:
             )
             return batch_td_error, batch_loss_mean, metrics, log_info
 
-        # vmap over individual windows
-        # TD ERROR: [window_size, T + sim_length, num_sim]
-        # Loss: [window_size, num_sim, ...]
-        if self.combine_real_sim:
-            batch_td_error, batch_loss_mean, metrics, log_info = jax.vmap(_dyna_loss_fn)(
-                timesteps,  # [T, W, ...]
-                actions,  # [T, W]
-                h_online,  # [T, W, D]
-                h_target,  # [T, W, D]
-                loss_mask,  # [T, W]
-                jax.random.split(rng, len(actions)),  # [W, 2]
-            )
-        # NOTE: Why would we vmap over the time dimension here??
-        else:
-            batch_td_error, batch_loss_mean, metrics, log_info = jax.vmap(
-                _dyna_loss_fn, (1, 1, 1, 1, 1, 0), 0
-            )(
-                timesteps,  # [T, W, ...]
-                actions,  # [T, W]
-                h_online,  # [T, W, D]
-                h_target,  # [T, W, D]
-                loss_mask,  # [T, W]
-                jax.random.split(rng, window_size),  # [W, 2]
-            )
+        # TD ERROR: [T + sim_length, num_sim]
+        # Loss: [num_sim, ...]
+        batch_td_error, batch_loss_mean, metrics, log_info = _dyna_loss_fn(
+            timesteps,  # [T, ...]
+            actions,  # [T]
+            h_online,  # [T, D]
+            h_target,  # [T, D]
+            loss_mask,  # [T]
+            rng,
+        )
 
-        # figuring out how to incorporate windows into TD error is annoying so punting
-        # NOTE: Can you explain this comment?
         batch_td_error = batch_td_error.mean()  # [num_sim]
         batch_loss_mean = batch_loss_mean.mean()  # []
 
@@ -978,11 +924,10 @@ def make_train(config, env, env_params):
                     sampled_batch.experience.agent_state
                 )
 
-                # TODO: Implement Burn-in logic (optional) -> update initial states, get learn_batch
-
                 # Call jax.value_and_grad(loss_fn.calculate_loss, has_aux=True)(...)
                 #       - Pass online_params, target_params, model_params, learn_batch, initial_states, rng
                 #       - Returns: (loss, (aux_data)), grads
+                # TODO: update this with new loss fn class
                 (loss, aux_data), grads = jax.value_and_grad(loss_fn.calculate_loss, has_aux=True)(
                     train_state.online_params,
                     train_state.target_network_params,
@@ -1060,7 +1005,7 @@ if __name__ == "__main__":
 
         # --- Training Loop Settings ---
         "TOTAL_TIMESTEPS": 1e6,  # Total environment steps
-        "TRAINING_INTERVAL": 1,   # How many env steps per actor sequence collection (R2D2/ACME often use 1)
+        "TRAINING_INTERVAL": 1,   # How many env steps per actor sequence collection
         "LEARNING_STARTS": 0, # Timesteps before learning begins
         "TARGET_UPDATE_INTERVAL": 250, # How many LEARNER UPDATES between target network syncs (R2D2 uses ~2500 steps)
 
@@ -1101,7 +1046,6 @@ if __name__ == "__main__":
         # --- Dyna Simulation Settings ---
         "NUM_SIMULATIONS": 4,      # Number of parallel simulations per starting state (DynaLossFn default 2)
         "SIMULATION_LENGTH": 20,    # Length of each simulated rollout (DynaLossFn default 5)
-        "WINDOW_SIZE": 20,         # Size of the rolling window on real data to trigger simulations (DynaLossFn default 20)
         "SIM_EPSILON_SETTING": 1,  # How simulation epsilon is chosen (1: ACME logspace, 2: 0.9-0.1 logspace, 3: fixed)
         "SIM_EPSILON": 0.1,        # Epsilon value if SIM_EPSILON_SETTING is 3
 
