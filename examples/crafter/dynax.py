@@ -407,45 +407,46 @@ def learner_log_extra(
 
 # Encoder
 class Encoder(nn.Module):
-  """
-  Simple observation encoder for Craftax-like environments.
-
-  Assumes:
-  - Input 'obs' is the image tensor directly.
-  - No normalization is applied.
-  - ReLU activation is used between hidden layers.
-  - Only processes the image input (no achievable/action).
-  """
-
-  hidden_dim: int = 512  # Dimension of the output features and hidden layers
-  num_layers: int = 1    # Total number of Dense layers (must be >= 1)
-  use_bias: bool = True    # Whether Dense layers should use bias terms
-
-  @nn.compact
-  def __call__(self, obs: jnp.ndarray):
     """
-    Processes an observation (assumed to be image data) into features.
+    Simple observation encoder for Craftax-like environments.
 
-    Args:
-      obs: The observation data, assumed to be the image tensor.
-
-    Returns:
-      A tensor representing the encoded features of the image.
+    Assumes:
+    - Input 'obs' is the image tensor directly.
+    - No normalization is applied.
+    - ReLU activation is used between hidden layers.
+    - Only processes the image input (no achievable/action).
     """
-    assert self.num_layers >= 1, "num_layers must be at least 1"
 
-    x = obs
-    for i in range(self.num_layers - 1):
-      x = nn.Dense(features=self.hidden_dim, use_bias=self.use_bias, name=f"hidden_{i}")(x)
-      x = nn.relu(x)
-    output_features = nn.Dense(features=self.hidden_dim, use_bias=self.use_bias, name="output_layer")(x)
+    hidden_dim: int = 512  # Dimension of the output features and hidden layers
+    num_layers: int = 1    # Total number of Dense layers (must be >= 1)
+    use_bias: bool = True    # Whether Dense layers should use bias terms
 
-    return output_features
+    @nn.compact
+    def __call__(self, obs: jnp.ndarray):
+        """
+        Processes an observation (assumed to be image data) into features.
+
+        Args:
+            obs: The observation data, assumed to be the image tensor.
+
+        Returns:
+            A tensor representing the encoded features of the image.
+        """
+        assert self.num_layers >= 1, "num_layers must be at least 1"
+
+        x = obs
+        for i in range(self.num_layers - 1):
+            x = nn.Dense(features=self.hidden_dim, use_bias=self.use_bias, name=f"hidden_{i}")(x)
+            x = nn.relu(x)
+        output_features = nn.Dense(features=self.hidden_dim, use_bias=self.use_bias, name="output_layer")(x)
+
+        return output_features
 
 # Agent
 # Based on ScannedRNN from PureJaxRL
 class DynaAgent(nn.Module):
     config: dict
+    encoder: Encoder
     env: TimestepWrapper
     env_params: Any
 
@@ -467,7 +468,8 @@ class DynaAgent(nn.Module):
             self.initialize_carry(ins.shape[0], hidden_size),
             rnn_state,
         )
-        new_rnn_state, y = nn.GRUCell()(rnn_state, ins)
+        embeds = self.encoder(ins)
+        new_rnn_state, y = nn.GRUCell()(rnn_state, embeds)
         preds = Predictions(q_vals=y, state=new_rnn_state)
         return new_rnn_state, preds
 
@@ -833,8 +835,14 @@ def make_train(config, env, env_params):
         init_timestep = vmap_reset(config["NUM_ENVS"])(_rng)
 
         # Initialize DynaAgent
+        encoder = Encoder(
+            hidden_dim=config["MLP_HIDDEN_DIM"],
+            num_layers=config["NUM_MLP_LAYERS"],
+            use_bias=config["USE_BIAS"],
+        )
         agent = DynaAgent(
-            config=config
+            config=config,
+            encoder=encoder,
         )
         rng, init_rng = jax.random.split(rng)
         init_x = (
@@ -1054,7 +1062,7 @@ if __name__ == "__main__":
         "NUM_MLP_LAYERS": 1,       # Layers for observation encoder MLP
         # "Q_HIDDEN_DIM": 512,       # Hidden dim for Q-head MLP (Dyna code used 512)
         # "NUM_Q_LAYERS": 1,         # Layers for Q-head MLP (Dyna code used 1)
-        "ACTIVATION": "relu",      # Activation function
+        # "ACTIVATION": "relu",      # Activation function
         "USE_BIAS": True,          # Whether to use bias in Dense layers
 
         # --- Optimizer Settings ---
