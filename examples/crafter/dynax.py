@@ -129,20 +129,31 @@ def concat_start_sims(start, simulations):
     concat_ = jax.vmap(concat_, (None, 1), 1)
     return jax.tree.map(concat_, start, simulations)
 
-# SIMULATION POLICY
-# One greedy, others epsilon-greedy
-vals = np.logspace(num=256, start=1, stop=3, base=0.1)
-epsilons = jax.random.choice(rng, vals, shape=(num_simulations - 1,))
-epsilons = jnp.concatenate((jnp.array((0,)), epsilons))
-
-def simulation_policy(preds: Predictions, sim_rng: jax.Array):
-    q_values = preds.q_vals
-    assert q_values.shape[0] == epsilons.shape[0]
-    sim_rng = jax.random.split(sim_rng, q_values.shape[0])
-    return jax.vmap(base_agent.epsilon_greedy_act, in_axes=(0, 0, 0))(
-        q_values, epsilons, sim_rng
+# --- Policy helpers ---
+def epsilon_greedy_act(q, eps, key):
+    key_a, key_e = jax.random.split(key, 2)
+    greedy_actions = jnp.argmax(q, axis=-1)
+    random_actions = jax.random.randint(
+        key_a, shape=greedy_actions.shape, minval=0, maxval=q.shape[-1]
     )
+    pick_random = (
+        jax.random.uniform(key_e, greedy_actions.shape) < eps
+    )
+    chosen_actions = jnp.where(pick_random, random_actions, greedy_actions)
+    return chosen_actions
 
+class FixedEpsilonGreedy:
+  """Epsilon Greedy action selection"""
+
+  def __init__(self, epsilons: float):
+    self.epsilons = epsilons
+
+  @partial(jax.jit, static_argnums=0)
+  def choose_actions(self, q_vals: jnp.ndarray, rng: chex.PRNGKey):
+    rng = jax.random.split(rng, q_vals.shape[0])
+    return jax.vmap(epsilon_greedy_act, in_axes=(0, 0, 0))(q_vals, self.epsilons, rng)
+
+# Simulate n trajectories for a given agent and policy
 def simulate_n_trajectories(
   h_tm1: RnnState,
   x_t: TimeStep,
@@ -206,7 +217,7 @@ def simulate_n_trajectories(
     x_t, h_t, preds_t = jax.vmap(initial_predictions, in_axes=(0, 0))(x_t, h_tm1)
 
     # choose epsilon-greedy action
-    a_t = policy_fn(preds_t, rng_)
+    a_t = policy_fn(preds_t.q_vals, rng_)
 
     def _single_model_step(carry, unused):
         (timestep, agent_state, a, rng) = carry
@@ -234,7 +245,7 @@ def simulate_n_trajectories(
         next_preds = jax.tree.map(lambda x: x.squeeze(0), next_preds)
 
         # get next actions
-        next_a = policy_fn(next_preds, rng_)
+        next_a = policy_fn(next_preds.q_vals, rng_)
 
         # format outputs
         carry = (next_timestep, next_agent_state, next_a, rng)
@@ -513,7 +524,6 @@ class DynaLossFn:
         is_last,        # [T+1, B]
         loss_mask,      # [T+1, B]
     ):
-        
         rewards = make_float(rewards)
         rewards = rewards - self.step_cost
         is_last = make_float(is_last)
@@ -610,7 +620,14 @@ class DynaLossFn:
 
         return batch_td_error, batch_loss_mean, metrics, log_info
 
-    def total_loss(self, online_params, target_params, batch: Transition, init_state: jax.Array, rng: jax.Array) -> tuple[jax.Array, dict]:
+    def total_loss(
+        self,
+        online_params,
+        target_params,
+        batch: Transition,
+        init_state: jax.Array,
+        rng: jax.Array
+    ) -> tuple[jax.Array, dict]:
         # Input: batch is sequence [B, T, ...], initial states are [B, ...]
 
         # --- 1. Online Loss Component ---
@@ -892,10 +909,23 @@ def make_train(config, env, env_params):
         )
         buffer_state = buffer.init(dummy_transition)
         
-        # Define actor_step function
+        # Define actor single step + policy
+        # BELOW is in range of ~(.9,.1)
+        rng, eps_rng = jax.random.split(rng, 2)
+        vals = np.logspace(
+            num=config["NUM_EPSILONS"],
+            start=config["EPSILON_MIN"],
+            stop=config["EPSILON_MAX"],
+            base=config["EPSILON_BASE"],
+        )
+        act_eps = jax.random.choice(eps_rng, vals, shape=(config["NUM_ENVS"],))
+        actor_policy = FixedEpsilonGreedy(
+            epsilons=act_eps
+        )
+
         def actor_step(carry, unused):
             agent_state, timestep, rng = carry
-            rng, _rng = jax.random.split(rng)
+            rng, act_rng, env_rng = jax.random.split(rng, 3)
 
             # Format inputs for apply fn
             obs, discount = timestep.observation, timestep.discount
@@ -912,25 +942,32 @@ def make_train(config, env, env_params):
             )
             q_vals = preds.q_vals
 
-            # TODO: change to sim policy
-            action = jnp.argmax(q_vals, axis=-1)
-
-            # remove time dim
+            # Get next action
             action = action.squeeze(axis=0)
+            action = actor_policy.choose_actions(q_vals, act_rng)
 
             # Get next timestep
-            next_timestep = vmap_step(config["NUM_ENVS"])(_rng, timestep.state, action)
+            next_timestep = vmap_step(config["NUM_ENVS"])(env_rng, timestep.state, action)
 
             # Create transition
             transition = Transition(timestep=next_timestep, action=action, agent_state=next_agent_state)
 
             return (next_agent_state, next_timestep, rng), transition
         
+        # Policy for simulation
+        rng, eps_rng = jax.random.split(rng)
+        vals = np.logspace(num=256, start=1, stop=3, base=0.1) # ACME default values, equivalent to SIM_EPSILON_SETTING=1
+        sim_eps = jax.random.choice(eps_rng, vals, shape=(config["NUM_SIMULATIONS"] - 1,))
+        sim_eps = jnp.concatenate((jnp.array((0,)), sim_eps))
+        simulation_policy = FixedEpsilonGreedy(
+            epsilons=sim_eps
+        )
+
         # Initialize DynaLossFn instance
         loss_fn = DynaLossFn(
             q_network=agent,
             config=config,
-            simulation_policy_fn=simulation_policy
+            simulation_policy=simulation_policy.choose_actions
         )
 
         def _train_step(runner_state, unused):
@@ -1051,7 +1088,7 @@ if __name__ == "__main__":
         "NUM_ENVS": 4,  # Number of parallel environments (PureJaxRL DQN used 10, can increase)
 
         # --- Training Loop Settings ---
-        "TOTAL_TIMESTEPS": 1e6,  # Total environment steps
+        "TOTAL_TIMESTEPS": 2_000_000,  # Total environment steps
         "TRAINING_INTERVAL": 1,   # How many env steps per actor sequence collection
         "LEARNING_STARTS": 0, # Timesteps before learning begins
         "TARGET_UPDATE_INTERVAL": 250, # How many LEARNER UPDATES between target network syncs (R2D2 uses ~2500 steps)
@@ -1091,17 +1128,15 @@ if __name__ == "__main__":
         "DYNA_COEFF": 1.0,         # Weight for the loss on simulated data (DynaLossFn default 1.0)
 
         # --- Dyna Simulation Settings ---
-        "NUM_SIMULATIONS": 4,      # Number of parallel simulations per starting state (DynaLossFn default 2)
-        "SIMULATION_LENGTH": 20,    # Length of each simulated rollout (DynaLossFn default 5)
-        "SIM_EPSILON_SETTING": 1,  # How simulation epsilon is chosen (1: ACME logspace, 2: 0.9-0.1 logspace, 3: fixed)
-        "SIM_EPSILON": 0.1,        # Epsilon value if SIM_EPSILON_SETTING is 3
+        "NUM_SIMULATIONS": 2,      # Number of parallel simulations per starting state (DynaLossFn default 2)
+        "SIMULATION_LENGTH": 10,    # Length of each simulated rollout (DynaLossFn default 5)
 
         # --- Actor Settings (Exploration) ---
         # Choose one exploration strategy
-        "FIXED_EPSILON": 0,        # 0: Linear Decay, 1: Fixed Logspace (ACME), 2: Fixed Logspace (0.9-0.1)
-        # "EPSILON_START": 1.0,      # Starting epsilon for linear decay
-        # "EPSILON_FINISH": 0.05,    # Final epsilon for linear decay
-        "EPSILON_ANNEAL_TIME": 5e5,# Timesteps to anneal epsilon over (PureJaxRL DQN used 25e4)
+        "NUM_EPSILONS": 256,
+        "EPSILON_MIN": 0.05,
+        "EPSILON_MAX": 0.9,
+        "EPSILON_BASE": 0.1,
 
         # --- Miscellaneous ---
         "SEED": 42,
