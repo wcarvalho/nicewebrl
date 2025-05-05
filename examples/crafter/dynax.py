@@ -153,6 +153,35 @@ class FixedEpsilonGreedy:
     rng = jax.random.split(rng, q_vals.shape[0])
     return jax.vmap(epsilon_greedy_act, in_axes=(0, 0, 0))(q_vals, self.epsilons, rng)
 
+# Rolling window logic
+@partial(jax.jit, static_argnums=(1,))
+def rolling_window(a, size: int):
+    """Create rolling windows of a specified size from an input array.
+
+    Rolls over the first dimension only, preserving other dimensions.
+
+    Args:
+        a (array-like): The input array of shape [T, ...]
+        size (int): The size of the rolling window
+
+    Returns:
+        Array of shape [T-size+1, size, ...]
+    """
+    # Get shape info
+    T = a.shape[0]  # length of first dimension
+    remaining_dims = a.shape[1:]  # all other dimensions
+
+    # Create start indices for the first dimension only
+    starts = jnp.arange(T - size + 1)
+
+    # Create slice for each start index, preserving other dimensions
+    def slice_at(start):
+        idx = (start,) + (0,) * len(remaining_dims)  # index tuple for all dims
+        size_tuple = (size,) + remaining_dims  # size tuple for all dims
+        return jax.lax.dynamic_slice(a, idx, size_tuple)
+
+    return jax.vmap(slice_at)(starts)
+
 # Simulate n trajectories for a given agent and policy
 def simulate_n_trajectories(
   h_tm1: RnnState,
@@ -756,6 +785,7 @@ class DynaLossFn:
         window_size = self.config["WINDOW_SIZE"]
         window_size = min(window_size, len(actions))
         window_size = max(window_size, 1)
+        roll = partial(rolling_window, size=window_size)
         simulate = partial(
             simulate_n_trajectories,
             network=self.agent,
@@ -764,6 +794,16 @@ class DynaLossFn:
             num_simulations=self.config["NUM_SIMULATIONS"],
             policy_fn=self.simulation_policy,
         )
+
+        # first do a rollowing window
+        # W = T-window_size+1 = number of windows
+        # T' = window_size
+        # [T, ...] --> [W, T', ...]
+        actions = jax.tree.map(roll, actions)
+        timesteps = jax.tree.map(roll, timesteps)
+        h_online = jax.tree.map(roll, h_online)
+        h_target = jax.tree.map(roll, h_target)
+        loss_mask = jax.tree.map(roll, loss_mask)
 
         def _dyna_loss_fn(t, a, h_on, h_tar, l_mask, key):
             """
@@ -794,9 +834,9 @@ class DynaLossFn:
             xs = (all_t.observation, resets)
 
             h_on_init = jax.tree.map(lambda x: x[0], h_on)
-            h_on_init = repeat(h_on_init, self.num_simulations)
+            h_on_init = repeat(h_on_init, self.config["NUM_SIMULATIONS"])
             h_tar_init = jax.tree.map(lambda x: x[0], h_tar)
-            h_tar_init = repeat(h_tar_init, self.num_simulations)
+            h_tar_init = repeat(h_tar_init, self.config["NUM_SIMULATIONS"])
 
             _, online_preds = self.agent.apply(online_params, h_on_init, xs)
             _, target_preds = self.agent.apply(target_params, h_tar_init, xs)
@@ -814,20 +854,19 @@ class DynaLossFn:
                 loss_mask=all_t_mask,
             )
             return batch_td_error, batch_loss_mean, metrics, log_info
+        
+        # Vmap over each window
+        batch_td_error, batch_loss_mean, metrics, log_info = jax.vmap(_dyna_loss_fn)(
+                timesteps,  # [W, T', ...]
+                actions,  # [W, T']
+                h_online,  # [W, T', D]
+                h_target,  # [W, T', D]
+                loss_mask,  # [W, T']
+                jax.random.split(rng, len(actions)),  # [W, 2]
+            )
 
-        # TD ERROR: [T + sim_length, num_sim]
-        # Loss: [num_sim, ...]
-        batch_td_error, batch_loss_mean, metrics, log_info = _dyna_loss_fn(
-            timesteps,  # [T, ...]
-            actions,  # [T]
-            h_online,  # [T, D]
-            h_target,  # [T, D]
-            loss_mask,  # [T]
-            rng,
-        )
-
-        batch_td_error = batch_td_error.mean()  # [num_sim]
-        batch_loss_mean = batch_loss_mean.mean()  # []
+        batch_td_error = batch_td_error.mean()  # [W, T', num_sim] -> []
+        batch_loss_mean = batch_loss_mean.mean()  # [W, num_sim] -> []
 
         return batch_td_error, batch_loss_mean, metrics, log_info
 
@@ -1130,6 +1169,7 @@ if __name__ == "__main__":
         # --- Dyna Simulation Settings ---
         "NUM_SIMULATIONS": 2,      # Number of parallel simulations per starting state (DynaLossFn default 2)
         "SIMULATION_LENGTH": 10,    # Length of each simulated rollout (DynaLossFn default 5)
+        "WINDOW_SIZE": 1,           # Number of windows to use, must be 1 for DynaLossFn
 
         # --- Actor Settings (Exploration) ---
         # Choose one exploration strategy
