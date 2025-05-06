@@ -41,6 +41,10 @@ jaxmarl = [
     "jax>=0.4.23,<=0.4.38",
     "jaxlib>=0.4.23,<=0.4.38",
 ]
+xland = [
+    "xminigrid",
+    "tqdm",
+]
 
 [project.urls]
 "Homepage" = "https://github.com/wcarvalho/nicewebrl"
