@@ -1,3 +1,20 @@
+"""
+Implements a synchronous multi-human interaction framework for web-based reinforcement learning environments.
+
+This module provides infrastructure for multiple humans to interact simultaneously with a shared
+environment through a leader-follower protocol. The main component is the MultiHumanLeaderFollowerEnvStage
+class, which:
+
+1. Designates one client as the leader for state management and synchronization
+2. Organizes users into rooms for collaborative interaction
+3. Collects actions from all users before advancing the environment
+4. Ensures state consistency across all clients via broadcast messages
+5. Handles serialization and persistence of environment states
+
+The framework is designed for two-agent environments where each human controls one agent,
+with support for action synchronization, state rendering, and experiment data collection.
+"""
+
 from typing import List, Callable, Dict, Optional
 from functools import partial
 import itertools
