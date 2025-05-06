@@ -1,0 +1,43 @@
+{
+  "os":  "macOS-15.0.1-arm64-arm-64bit",
+  "python":  "CPython 3.10.5",
+  "startedAt":  "2025-02-05T18:14:44.693234Z",
+  "program":  "/Users/vikramgoddla/Carvalho_repos/ppr_rnn_minigrid/ppo-minigrid/main.py",
+  "codePath":  "ppo-minigrid/main.py",
+  "git":  {
+    "remote":  "https://github.com/vikramgoddla/ppr_rnn_minigrid.git"
+  },
+  "email":  "vikramgoddla18@gmail.com",
+  "root":  "/Users/vikramgoddla/Carvalho_repos/ppr_rnn_minigrid/ppo-minigrid",
+  "host":  "dhcp-10-250-140-63.harvard.edu",
+  "executable":  "/Users/vikramgoddla/anaconda3/envs/ppo_env/bin/python",
+  "codePathLocal":  "main.py",
+  "cpu_count":  8,
+  "cpu_count_logical":  8,
+  "disk":  {
+    "/":  {
+      "total":  "494384795648",
+      "used":  "312696922112"
+    },
+    "/System/Volumes/Data":  {
+      "total":  "494384795648",
+      "used":  "312696922112"
+    }
+  },
+  "memory":  {
+    "total":  "17179869184"
+  },
+  "cpu":  {
+    "count":  8,
+    "countLogical":  8
+  },
+  "apple":  {
+    "name":  "Apple M1 Pro",
+    "ecpuCores":  2,
+    "pcpuCores":  6,
+    "gpuCores":  14,
+    "memoryGb":  16,
+    "swapTotalBytes":  "15032385536",
+    "ramTotalBytes":  "17179869184"
+  }
+}
