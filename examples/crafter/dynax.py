@@ -149,7 +149,7 @@ class FixedEpsilonGreedy:
     self.epsilons = epsilons
 
   @partial(jax.jit, static_argnums=0)
-  def choose_actions(self, q_vals: jnp.ndarray, rng: chex.PRNGKey):
+  def choose_actions(self, q_vals: jnp.ndarray, rng: jax.random.PRNGKey):
     rng = jax.random.split(rng, q_vals.shape[0])
     return jax.vmap(epsilon_greedy_act, in_axes=(0, 0, 0))(q_vals, self.epsilons, rng)
 
@@ -184,11 +184,11 @@ def rolling_window(a, size: int):
 
 # Simulate n trajectories for a given agent and policy
 def simulate_n_trajectories(
-  h_tm1: RnnState,
+  h_tm1: jax.Array,
   x_t: TimeStep,
   rng: jax.random.PRNGKey,
   agent: nn.Module,
-  params: Params,
+  params: jax.Array,
   policy_fn: callable = None,
   num_steps: int = 5,
   num_simulations: int = 5,
@@ -355,147 +355,6 @@ class Logger:
             wandb.log({f"learner_image/{tag}": wandb.Image(fig)})
         plt.close(fig)
 
-def learner_log_extra(
-  data: dict,
-  config: dict,
-):
-  def log_data(
-    key: str,
-    timesteps: TimeStep,
-    actions: np.array,
-    td_errors: np.array,
-    loss_mask: np.array,
-    q_values: np.array,
-    q_loss: np.array,
-    q_target: np.array,
-  ):
-    # Extract the relevant data
-    # only use data from batch dim = 0
-    # [T, B, ...] --> # [T, ...]
-
-    discounts = timesteps.discount
-    rewards = timesteps.reward
-    q_values_taken = rlax.batched_index(q_values, actions)
-
-    # Create a figure with three subplots
-    width = 0.3
-    nT = len(rewards)  # e.g. 20 --> 8
-    width = max(int(width * nT), 10)
-    fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=(width, 20))
-
-    # Plot rewards and q-values in the top subplot
-    def format(ax):
-      ax.set_xlabel("Time")
-      ax.grid(True)
-      ax.set_xticks(range(0, len(rewards), 1))
-
-    ax1.plot(rewards, label="Rewards")
-    ax1.plot(q_values_taken, label="Q-Values")
-    ax1.plot(q_target, label="Q-Targets")
-    ax1.set_title("Rewards and Q-Values")
-    format(ax1)
-    ax1.legend()
-
-    # Plot TD errors in the middle subplot
-    ax2.plot(td_errors)
-    format(ax2)
-    ax2.set_title("TD Errors")
-
-    # Plot Q-loss in the bottom subplot
-    ax3.plot(q_loss)
-    format(ax3)
-    ax3.set_title("Q-Loss")
-
-    # Plot episode quantities
-    is_last = timesteps.last()
-    ax4.plot(discounts, label="Discounts")
-    ax4.plot(loss_mask, label="mask")
-    ax4.plot(is_last, label="is_last")
-    format(ax4)
-    ax4.set_title("Episode markers")
-    ax4.legend()
-
-    if wandb.run is not None:
-      wandb.log({f"learner_example/{key}/q-values": wandb.Image(fig)})
-    plt.close(fig)
-
-    ##############################
-    # plot images of env
-    ##############################
-    # ------------
-    # get images
-    # ------------
-
-    # state_images = []
-    obs_images = []
-    max_len = min(config.get("MAX_EPISODE_LOG_LEN", 40), len(rewards))
-    for idx in range(max_len):
-      index = lambda y: jax.tree.map(lambda x: x[idx], y)
-      obs_image = render_fn(index(timesteps.state.env_state))
-      obs_images.append(obs_image)
-
-    # ------------
-    # plot
-    # ------------
-    actions_taken = [Action(a).name for a in actions]
-
-    def index(t, idx):
-      return jax.tree.map(lambda x: x[idx], t)
-
-    def panel_title_fn(timesteps, i):
-      title = f"t={i}"
-      title += f"\n{actions_taken[i]}"
-      if i >= len(timesteps.reward) - 1:
-        return title
-      title += (
-        f"\nr={timesteps.reward[i + 1]:.2f}, $\\gamma={timesteps.discount[i + 1]}$"
-      )
-
-      if hasattr(timesteps.observation, "achievements"):
-        achieved = timesteps.observation.achievements[i + 1]
-        if achieved.sum() > 1e-5:
-          achievement_idx = achieved.argmax()
-          try:
-            achievement = Achievement(achievement_idx).name
-            title += f"\n{achievement}"
-          except ValueError:
-            title += f"\nHealth?"
-      elif hasattr(timesteps.state.env_state, "current_goal"):
-        start_location = timesteps.state.env_state.start_position
-        goal = timesteps.state.env_state.current_goal[i]
-        goal_name = Achievement(int(goal)).name
-        title += f"\nstart={start_location}\ngoal={goal}\ngoal={goal_name}"
-
-      return title
-
-    fig = plot_frames(
-      timesteps=timesteps,
-      frames=obs_images,
-      panel_title_fn=panel_title_fn,
-      ncols=6,
-    )
-    if wandb.run is not None:
-      wandb.log({f"learner_example/{key}/trajectory": wandb.Image(fig)})
-    plt.close(fig)
-
-  def callback(d):
-    log_data(**d, key="dyna")
-
-  # this will be the value after update is applied
-  n_updates = data["n_updates"] + 1
-  is_log_time = n_updates % config["LEARNER_LOG_PERIOD"] == 0
-
-  if "dyna" in data:
-    # [Batch, Env Time, Sim Time, Num Simuations]
-    dyna_data = jax.tree.map(lambda x: x[0, 0, :, 0], data["dyna"])
-
-    jax.lax.cond(
-      is_log_time,
-      lambda d: jax.debug.callback(callback, d),
-      lambda d: None,
-      dyna_data,
-    )
-
 # --- Network Definition ---
 
 # Encoder
@@ -618,14 +477,14 @@ class DynaLossFn:
         # [T, B]
         selector_actions = jnp.argmax(online_preds.q_vals, axis=-1)  # [T+1, B]
         q_t, target_q_t = batch_td_error_fn(
-        online_preds.q_vals[:-1],  # [T+1] --> [T]
-        actions[:-1],  # [T+1] --> [T]
-        target_preds.q_vals[1:],  # [T+1] --> [T]
-        selector_actions[1:],  # [T+1] --> [T]
-        rewards[1:],  # [T+1] --> [T]
-        discounts[1:],
-        is_last[1:],
-        lambda_[1:],
+            online_preds.q_vals[:-1],  # [T+1] --> [T]
+            actions[:-1],  # [T+1] --> [T]
+            target_preds.q_vals[1:],  # [T+1] --> [T]
+            selector_actions[1:],  # [T+1] --> [T]
+            rewards[1:],  # [T+1] --> [T]
+            discounts[1:],
+            is_last[1:],
+            lambda_[1:],
         )  # [T+1] --> [T]
 
         # ensure target = 0 when episode terminates
@@ -636,12 +495,12 @@ class DynaLossFn:
 
         # 1. Prepare Inputs (similar to original)
         rewards = make_float(rewards)
-        rewards = rewards - config["STEP_COST"]      # [T+1, B]
+        rewards = rewards - self.config["STEP_COST"]      # [T+1, B]
         is_last = make_float(is_last)
-        discounts = non_terminal * config["DISCOUNT"] # [T+1, B]
-        lambda_ = config["TD_LAMBDA"]
+        discounts = non_terminal * self.config["GAMMA"] # [T+1, B]
+        lambda_ = self.config["TD_LAMBDA"]
 
-        # 2. Align Time Steps for rlax.q_lambda
+        # 2. Align Time Steps
         q_tm1 = online_preds.q_vals[:-1]      # Online Q(s_t, a) [T, B, A]
         a_tm1 = actions[:-1]                  # Action a_t [T, B]
         r_t = rewards[1:]                     # Reward r_{t+1} [T, B]
@@ -736,9 +595,7 @@ class DynaLossFn:
 
         # Calculate TD-Lambda loss L_online based on online_preds, target_preds, batch.action, batch.timestep.reward, batch.timestep.discount
         all_metrics = {}
-        all_log_info = {
-        "n_updates": steps,
-        }
+        all_log_info = {}
 
         T, B = loss_mask.shape[:2]
 
@@ -784,18 +641,18 @@ class DynaLossFn:
             x_t = timestep
 
             dyna_loss_fn = functools.partial(
-                self.dyna_loss_fn, params=online_params, target_params=target_params
+                self.dyna_loss_fn, online_params=online_params, target_params=target_params
             )
 
             # vmap over batch
             dyna_loss_fn = jax.vmap(dyna_loss_fn, (1, 1, 1, 1, 1, 0), 0)
             _, dyna_batch_loss, dyna_metrics, dyna_log_info = dyna_loss_fn(
                 x_t,
-                data.action,
+                actions,
                 h_tm1_online,
                 h_tm1_target,
                 loss_mask,
-                jax.random.split(key_grad, B),
+                jax.random.split(rng, B),
             )
             L_dyna += self.dyna_coeff * dyna_batch_loss
 
@@ -818,7 +675,7 @@ class DynaLossFn:
         h_target: jax.Array,
         loss_mask: jax.Array,
         rng: jax.random.PRNGKey,
-        params,
+        online_params,
         target_params,
     ):
         """
@@ -837,8 +694,8 @@ class DynaLossFn:
         roll = partial(rolling_window, size=window_size)
         simulate = partial(
             simulate_n_trajectories,
-            network=self.agent,
-            params=params,
+            agent=self.agent,
+            params=online_params,
             num_steps=self.config["SIMULATION_LENGTH"],
             num_simulations=self.config["NUM_SIMULATIONS"],
             policy_fn=self.simulation_policy,
@@ -897,7 +754,7 @@ class DynaLossFn:
                 online_preds=online_preds,
                 target_preds=target_preds,
                 actions=all_a,
-                rewards=all_t.reward / MAX_REWARD,
+                rewards=all_t.reward,
                 is_last=make_float(all_t.last()),
                 non_terminal=all_t.discount,
                 loss_mask=all_t_mask,
@@ -1033,10 +890,11 @@ def make_train(config, env, env_params):
                 agent_state,
                 x,
             )
-            q_vals = preds.q_vals
+
+            # Remove time dim
+            q_vals = preds.q_vals.squeeze(0)
 
             # Get next action
-            action = action.squeeze(axis=0)
             action = actor_policy.choose_actions(q_vals, act_rng)
 
             # Get next timestep
@@ -1058,7 +916,7 @@ def make_train(config, env, env_params):
 
         # Initialize DynaLossFn instance
         loss_fn = DynaLossFn(
-            q_network=agent,
+            agent=agent,
             config=config,
             simulation_policy=simulation_policy.choose_actions
         )
@@ -1196,13 +1054,13 @@ if __name__ == "__main__":
     config = {
         # --- Environment Settings ---
         "ENV_NAME": "Craftax-Symbolic-v1", # Example, adjust as needed
-        "NUM_ENVS": 4,  # Number of parallel environments (PureJaxRL DQN used 10, can increase)
+        "NUM_ENVS": 32,  # Number of parallel environments (PureJaxRL DQN used 10, can increase)
 
         # --- Training Loop Settings ---
-        "TOTAL_TIMESTEPS": 2_000_000,  # Total environment steps
-        "TRAINING_INTERVAL": 1,   # How many env steps per actor sequence collection
-        "LEARNING_STARTS": 0, # Timesteps before learning begins
-        "TARGET_UPDATE_INTERVAL": 250, # How many LEARNER UPDATES between target network syncs (R2D2 uses ~2500 steps)
+        "TOTAL_TIMESTEPS": 1_000_000,  # Total environment steps
+        "TRAINING_INTERVAL": 5,   # How many env steps per actor sequence collection
+        "LEARNING_STARTS": 10_000, # Timesteps before learning begins
+        "TARGET_UPDATE_INTERVAL": 1_000, # How many LEARNER UPDATES between target network syncs (R2D2 uses ~2500 steps)
 
         # --- Network Settings ---
         "RNN_HIDDEN_DIM": 256,     # Size of RNN hidden state (Dyna code used 256)
@@ -1225,12 +1083,6 @@ if __name__ == "__main__":
         "BUFFER_BATCH_SIZE": 64,   # Batch size sampled from buffer for learning (e.g., 32, 64)
         "SEQUENCE_LENGTH": 40,     # Length of sequences sampled from buffer (R2D2 uses ~80)
         "PERIOD": 1,               # Store sequences overlapping by N-1 steps (1 is standard)
-        # "BURN_IN_LENGTH": 4,     # Number of steps to burn-in RNN state (0 disables, R2D2 uses ~half sequence length)
-
-        # --- Prioritized Replay Settings ---
-        # "PRIORITY_EXPONENT": 0.9,            # Alpha exponent for PER (fbx default 0.9)
-        # "IMPORTANCE_SAMPLING_EXPONENT": 0.6, # Beta exponent for PER IS weights (DynaLossFn default 0.6)
-        # "MAX_PRIORITY_WEIGHT": 0.9,          # Mixture coefficient for max/mean priority (DynaLossFn default 0.9)
 
         # --- Loss Function Settings ---
         "GAMMA": 0.99,             # Discount factor
@@ -1254,7 +1106,7 @@ if __name__ == "__main__":
         # --- Miscellaneous ---
         "SEED": 42,
         "LEARNER_LOG_PERIOD": 500,  # How many LEARNER UPDATES between logging losses/metrics
-        "LEARNER_EXTRA_LOG_PERIOD": 5000,
+        "LEARNER_EXTRA_LOG_PERIOD": 5_000,
     }
 
     # Create env and env_params
