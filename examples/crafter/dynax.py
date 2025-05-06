@@ -1,4 +1,3 @@
-from re import T
 import jax
 import jax.numpy as jnp
 import flax
@@ -13,8 +12,9 @@ from typing import Optional, Any
 from craftax.craftax_env import make_craftax_env_from_name
 from nicewebrl.nicejax import TimestepWrapper
 from jaxneurorl import losses
-from jaxneurorl.agents import qlearning as base_agent
 import rlax
+import matplotlib.pyplot as plt
+import wandb
 
 # Assume gymnax environment imports
 
@@ -302,6 +302,59 @@ def simulate_n_trajectories(
     return all_timesteps, sim_outputs
 
 # --- Logger Definition ---
+# TODO: Add episode logging with images
+class Logger:
+    def __init__(self, config):
+        self.config = config
+        self.log_period = config.get("LEARNER_LOG_PERIOD", 100)
+        self.max_ep_len = config.get("MAX_EPISODE_LOG_LEN", 40)
+
+    def metrics(self, metrics: dict):
+        """Log scalar metrics (e.g., q_loss, td_error, reward)."""
+        wandb.log(metrics)
+
+    def learner_log_extra(self, log_info: dict):
+        """Log diagnostic visuals (e.g., q-curves, trajectories) periodically."""
+        if "dyna" in log_info:
+            # [B, Env_time, Sim_time, Num_sim] -> [Sim_time]
+            data = jax.tree.map(lambda x: x[0, 0, :, 0], log_info["dyna"])
+            self._log_trajectory_images(data, tag="dyna")
+        if "online" in log_info:
+            # [T, B] -> [T]
+            data = jax.tree.map(lambda x: x[:, 0], log_info["online"])
+            self._log_trajectory_images(data, tag="online")
+
+    def _log_trajectory_images(self, data: dict, tag: str):
+        """Make matplotlib visualizations from per-timestep arrays and log to WandB."""
+        rewards = data["timesteps"].reward
+        actions = data["actions"]
+        td_errors = data["td_errors"]
+        q_loss = data["q_loss"]
+        q_values = data["q_values"]
+        q_target = data["q_target"]
+        discounts = data["timesteps"].discount
+        is_last = data["timesteps"].last()
+        loss_mask = data["loss_mask"]
+
+        width = max(10, int(0.3 * len(rewards)))
+        fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=(width, 20))
+
+        ax1.plot(rewards, label="Reward")
+        ax1.plot(rlax.batched_index(q_values, actions), label="Q")
+        ax1.plot(q_target, label="Q Target")
+        ax1.set_title("Rewards and Q-Values"); ax1.legend(); ax1.grid()
+
+        ax2.plot(td_errors); ax2.set_title("TD Error"); ax2.grid()
+        ax3.plot(q_loss); ax3.set_title("Q Loss"); ax3.grid()
+        ax4.plot(discounts, label="γ")
+        ax4.plot(loss_mask, label="Mask")
+        ax4.plot(is_last, label="is_last")
+        ax4.set_title("Episode Markers"); ax4.legend(); ax4.grid()
+
+        if wandb.run is not None:
+            wandb.log({f"learner_image/{tag}": wandb.Image(fig)})
+        plt.close(fig)
+
 def learner_log_extra(
   data: dict,
   config: dict,
@@ -630,21 +683,21 @@ class DynaLossFn:
 
         # 7. Calculate Metrics (similar to original)
         metrics = {
-        "0.q_loss": batch_loss.mean(),
-        "0.q_td": jnp.abs(batch_td_error).mean(),
-        "1.reward": r_t.mean(),
-        "z.q_mean": online_preds.q_vals.mean(),
-        "z.q_var": online_preds.q_vals.var(),
+            "0.q_loss": batch_loss.mean(),
+            "0.q_td": jnp.abs(batch_td_error).mean(),
+            "1.reward": r_t.mean(),
+            "z.q_mean": online_preds.q_vals.mean(),
+            "z.q_var": online_preds.q_vals.var(),
         }
 
         log_info = {
-        "timesteps": timestep,
-        "actions": actions,
-        "td_errors": batch_td_error,  # [T]
-        "loss_mask": loss_mask,  # [T]
-        "q_values": online_preds.q_vals,  # [T, B]
-        "q_loss": batch_loss,  # [T, B]
-        "q_target": target_q_t,
+            "timesteps": timestep, # [T, B, ...]
+            "actions": actions, # [T, B, A]
+            "td_errors": batch_td_error,  # [T, B]
+            "loss_mask": loss_mask,  # [T, B]
+            "q_values": online_preds.q_vals,  # [T, B]
+            "q_loss": batch_loss,  # [T, B]
+            "q_target": target_q_t, # [T, B]
         }
 
         return batch_td_error, batch_loss_mean, metrics, log_info
@@ -711,7 +764,6 @@ class DynaLossFn:
         td_error = jnp.concatenate((td_error, jnp.zeros(B)[None]), 0)
         td_error = jnp.abs(td_error)
 
-
         # --- 2. Dyna Loss Component ---
         L_dyna = 0.0
         if self.config["DYNA_COEFF"] > 0:
@@ -756,10 +808,7 @@ class DynaLossFn:
         # TODO: Add importance sampling weights if using prioritized replay
         total_loss = self.config["ONLINE_COEFF"] * jnp.mean(L_online) + self.config["DYNA_COEFF"] * L_dyna
 
-        # --- 4. Log metrics ---
-        self.logger.learner_log_extra(all_log_info)
-
-        return td_error, total_loss, all_metrics
+        return td_error, total_loss, all_metrics, all_log_info
     
     def dyna_loss_fn(
         self,
@@ -881,6 +930,8 @@ def make_train(config, env, env_params):
         env.step, in_axes=(0, 0, 0, None)
     )(jax.random.split(rng, num_envs), state, action, env_params)
 
+    logger = Logger(config)
+
     NUM_UPDATES = int(
         config["TOTAL_TIMESTEPS"] // config["NUM_ENVS"] // config["TRAINING_INTERVAL"]
     )
@@ -975,7 +1026,7 @@ def make_train(config, env, env_params):
 
             # Get action from agent
             next_agent_state, preds = agent.apply(
-                train_state.online_params,
+                train_state.params,
                 agent_state,
                 x,
             )
@@ -1049,10 +1100,9 @@ def make_train(config, env, env_params):
 
                 # Call jax.value_and_grad(loss_fn.calculate_loss, has_aux=True)(...)
                 #       - Pass online_params, target_params, model_params, learn_batch, initial_states, rng
-                #       - Returns: (loss, (aux_data)), grads
-                # TODO: update this with new loss fn class
-                (loss, aux_data), grads = jax.value_and_grad(loss_fn.calculate_loss, has_aux=True)(
-                    train_state.online_params,
+                #       - Returns: (td_error, loss, metrics, log_info), grads
+                (td_error, loss, metrics, log_info), grads = jax.value_and_grad(loss_fn.total_loss, has_aux=True)(
+                    train_state.params,
                     train_state.target_network_params,
                     sampled_batch,
                     init_state,
@@ -1066,7 +1116,20 @@ def make_train(config, env, env_params):
                 # Increment update counter in train_state
                 train_state = train_state.replace(n_updates=train_state.n_updates + 1)
 
-                # TODO: Log metrics from aux_data["metrics"]
+                # Log metrics from loss fn
+                jax.lax.cond(
+                    train_state.n_updates % config["LEARNER_LOG_PERIOD"] == 0,
+                    lambda d: jax.debug.callback(logger.metrics, d),
+                    lambda d: None,
+                    metrics
+                )
+
+                jax.lax.cond(
+                    train_state.n_updates % config["LEARNER_EXTRA_LOG_PERIOD"] == 0,
+                    lambda d: jax.debug.callback(logger.learner_log_extra, d),
+                    lambda d: None,
+                    log_info
+                )
 
                 return train_state, buffer_state, rng
 
@@ -1143,9 +1206,10 @@ if __name__ == "__main__":
 
         # --- Optimizer Settings ---
         "LEARNING_RATE": 2.5e-4,   # Learning rate (PureJaxRL DQN used 2.5e-4)
+        "LR": 3e-4,
         "LR_LINEAR_DECAY": False,  # Whether to use linear LR decay
         "EPS_ADAM": 1e-5,          # Adam optimizer epsilon (ACME default 1e-5)
-        "MAX_GRAD_NORM": 40.0,     # Gradient clipping norm (ACME default 40.0)
+        "MAX_GRAD_NORM": 80,       # Gradient clipping norm (ACME default 40.0)
 
         # --- Buffer Settings ---
         "BUFFER_SIZE": 50000,      # Total transitions in buffer (R2D2 often uses 1M+, adjust based on memory)
@@ -1180,7 +1244,8 @@ if __name__ == "__main__":
 
         # --- Miscellaneous ---
         "SEED": 42,
-        "LEARNER_LOG_PERIOD": 100,  # How many LEARNER UPDATES between logging losses/metrics
+        "LEARNER_LOG_PERIOD": 500,  # How many LEARNER UPDATES between logging losses/metrics
+        "LEARNER_EXTRA_LOG_PERIOD": 5000,
     }
 
     # Create env and env_params
