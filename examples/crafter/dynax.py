@@ -963,16 +963,19 @@ def make_train(config, env, env_params):
         target_params = online_params
         
         # Initialize Optimizer
-        optimizer = optax.adam(learning_rate=config["LEARNING_RATE"])
-        opt_state = optimizer.init(online_params)
+        lr = config["LR"]
+        tx = optax.chain(
+            optax.clip_by_global_norm(config["MAX_GRAD_NORM"]),
+            optax.adam(learning_rate=lr, eps=config["EPS_ADAM"]),
+        )
         
         # Initialize CustomTrainState
         train_state = CustomTrainState(
             params=online_params,
             target_network_params=target_params,
-            opt_state=opt_state,
+            tx=tx,
             timesteps=0,
-            n_updates=0
+            n_updates=0,
         )
         
         # Initialize Trajectory Replay Buffer
@@ -1147,12 +1150,18 @@ def make_train(config, env, env_params):
 
             # --- 4. Update Target Network ---
             # Periodically copy online_params to target_network_params in train_state
-            # TODO: Use optax.incremental_update to update target_network_params
+            # Use optax.incremental_update to update target_network_params
             train_state = jax.lax.cond(
-                train_state.n_updates % config["TARGET_UPDATE_INTERVAL"] == 0,
-                lambda ts: ts.replace(target_network_params=ts.params),
-                lambda ts: ts,
-                train_state
+                train_state.timesteps % config["TARGET_UPDATE_INTERVAL"] == 0,
+                lambda train_state: train_state.replace(
+                    target_network_params=optax.incremental_update(
+                        train_state.params,
+                        train_state.target_network_params,
+                        config["TAU"],
+                    )
+                ),
+                lambda train_state: train_state,
+                operand=train_state,
             )
 
             # --- 5. Logging / Evaluation ---
@@ -1205,18 +1214,18 @@ if __name__ == "__main__":
         "USE_BIAS": True,          # Whether to use bias in Dense layers
 
         # --- Optimizer Settings ---
-        "LEARNING_RATE": 2.5e-4,   # Learning rate (PureJaxRL DQN used 2.5e-4)
         "LR": 3e-4,
         "LR_LINEAR_DECAY": False,  # Whether to use linear LR decay
         "EPS_ADAM": 1e-5,          # Adam optimizer epsilon (ACME default 1e-5)
         "MAX_GRAD_NORM": 80,       # Gradient clipping norm (ACME default 40.0)
+        "TAU": 1.0,
 
         # --- Buffer Settings ---
         "BUFFER_SIZE": 50000,      # Total transitions in buffer (R2D2 often uses 1M+, adjust based on memory)
         "BUFFER_BATCH_SIZE": 64,   # Batch size sampled from buffer for learning (e.g., 32, 64)
         "SEQUENCE_LENGTH": 40,     # Length of sequences sampled from buffer (R2D2 uses ~80)
         "PERIOD": 1,               # Store sequences overlapping by N-1 steps (1 is standard)
-        # "BURN_IN_LENGTH": 4,       # Number of steps to burn-in RNN state (0 disables, R2D2 uses ~half sequence length)
+        # "BURN_IN_LENGTH": 4,     # Number of steps to burn-in RNN state (0 disables, R2D2 uses ~half sequence length)
 
         # --- Prioritized Replay Settings ---
         # "PRIORITY_EXPONENT": 0.9,            # Alpha exponent for PER (fbx default 0.9)
