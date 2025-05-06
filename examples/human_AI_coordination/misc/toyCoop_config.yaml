@@ -1,0 +1,48 @@
+"ENV_NAME": "ToyCoop"  # ToyCoop or overcooked
+"LR": 3e-4
+"NUM_ENVS": 32
+"NUM_SEEDS": 1
+"NUM_STEPS": 100
+"FC_DIM_SIZE": 256
+"GRU_HIDDEN_DIM": 256
+"TOTAL_TIMESTEPS": 1e8
+"UPDATE_EPOCHS": 4
+"NUM_MINIBATCHES": 2 
+"GAMMA": 0.99
+"GAE_LAMBDA": 0.95
+"CLIP_EPS": 0.3
+"SCALE_CLIP_EPS": False
+"ENT_COEF": 0.01
+"VF_COEF": 1.0
+"MAX_GRAD_NORM": 0.5
+"ACTIVATION": "relu"
+"ANNEAL_LR": True
+"SEED": 30
+"ENV_KWARGS": 
+  "random_reset" : True  # relevant for which env to train/test on. If true, it is IK
+  "max_steps": 100
+  # toy specific kwargs
+  "debug": False
+  # overcooked specific kwargs
+  "check_held_out": True  # if false, we don't check if the reset env is held out
+  "shuffle_inv_and_pot": True # if true, we shuffle pot status and inventory
+  "layout": "cramped_room_padded"
+"TRAINING": True
+"TRAIN_KWARGS":
+  "ckpt_id": 0  # loads from ckpt_id - 1 if available
+  "overwrite_ckpt": False # if true, will overwrite ckpt_id
+  "finetune": False  # if true, load from opposing paradigm and cut learning rate and training steps by 10x
+"TEST_KWARGS":
+  "beta": 1.0
+  "argmax": False  # otherwise we sample from policy
+  "num_trajs": 100
+  "plot": False  # if true, will get precedence over saving data
+  "self_play": False  # get's full cross play matrix
+  "ik": False  # relevant to which model to load (ik vs sk)
+  "debug": False
+  "use_ckpt": True  # if true, will load from ckpt_id, otherwise will load from latest
+"GRAPH_NET": True
+# WandB Params
+"ENTITY": "social-rl"                                          
+"PROJECT": "InfiniteKitchen"
+"WANDB_MODE" : "disabled"
