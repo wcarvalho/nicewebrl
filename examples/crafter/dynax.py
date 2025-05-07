@@ -304,27 +304,45 @@ def simulate_n_trajectories(
 # --- Logger Definition ---
 # TODO: Add episode logging with images
 class Logger:
-    def __init__(self, config):
-        self.config = config
-        self.log_period = config.get("LEARNER_LOG_PERIOD", 100)
-        self.max_ep_len = config.get("MAX_EPISODE_LOG_LEN", 40)
-
-    def metrics(self, metrics: dict):
+    def metrics_logger(self, train_state, metrics):
         """Log scalar metrics (e.g., q_loss, td_error, reward)."""
-        wandb.log(metrics)
+        def callback(ts, m):
+            m.update(
+                {
+                    f"{key}/num_actor_steps": ts.timesteps,
+                    f"{key}/num_learner_updates": ts.n_updates,
+                }
+            )
+            wandb.log(m)
+        jax.debug.callback(callback, train_state, metrics)
+    
+    def gradient_logger(self, train_state, grads):
+        gradient_metrics = {
+            f"{key}/{k}_norm": optax.global_norm(v) for k, v in grads.items()
+        }
 
-    def learner_log_extra(self, log_info: dict):
+        def callback(ts, g):
+            g.update(
+                {
+                f"{key}/num_actor_steps": ts.timesteps,
+                f"{key}/num_learner_updates": ts.n_updates,
+                }
+            )
+            wandb.log(g)
+
+        jax.debug.callback(callback, train_state, gradient_metrics)
+
+    def extra_logger(self, log_info):
         """Log diagnostic visuals (e.g., q-curves, trajectories) periodically."""
-        if "dyna" in log_info:
+        def callback(log_info):
             # [B, Env_time, Sim_time, Num_sim] -> [Sim_time]
             data = jax.tree.map(lambda x: x[0, 0, :, 0], log_info["dyna"])
             self._log_trajectory_images(data, tag="dyna")
-        if "online" in log_info:
-            # [T, B] -> [T]
-            data = jax.tree.map(lambda x: x[:, 0], log_info["online"])
-            self._log_trajectory_images(data, tag="online")
 
-    def _log_trajectory_images(self, data: dict, tag: str):
+        jax.debug.callback(callback, log_info)
+
+
+    def _log_trajectory_images(self, data, tag):
         """Make matplotlib visualizations from per-timestep arrays and log to WandB."""
         rewards = data["timesteps"].reward
         actions = data["actions"]
@@ -780,7 +798,7 @@ def make_train(config, env, env_params):
         env.step, in_axes=(0, 0, 0, None)
     )(jax.random.split(rng, num_envs), timestep, action, env_params)
 
-    logger = Logger(config)
+    logger = Logger()
 
     NUM_UPDATES = int(
         config["TOTAL_TIMESTEPS"] // config["NUM_ENVS"] // config["TRAINING_INTERVAL"]
@@ -830,12 +848,18 @@ def make_train(config, env, env_params):
         
         # Initialize Trajectory Replay Buffer
         buffer = fbx.make_trajectory_buffer(
-            max_length_time_axis=config["BUFFER_SIZE"],
-            min_length_time_axis=config["MIN_BUFFER_SIZE"],
-            sample_batch_size=config["NUM_ENVS"],
+            max_length_time_axis=config["BUFFER_SIZE"] // config["NUM_ENVS"],
+            min_length_time_axis=config["TOTAL_BATCH_SIZE"] // config["SAMPLE_BATCH_SIZE"],
             add_batch_size=config["NUM_ENVS"],
-            sample_sequence_length=config["SEQUENCE_LENGTH"],
-            period=config["PERIOD"],
+            sample_batch_size=config["SAMPLE_BATCH_SIZE"],
+            sample_sequence_length=config["TOTAL_BATCH_SIZE"] // config["SAMPLE_BATCH_SIZE"],
+            period=config["SAMPLING_PERIOD"],
+        )
+        buffer = buffer.replace(
+            init=jax.jit(buffer.init),
+            add=jax.jit(buffer.add, donate_argnums=0),
+            sample=jax.jit(buffer.sample),
+            can_sample=jax.jit(buffer.can_sample),
         )
 
         dummy_timestep = TimeStep(
@@ -970,28 +994,14 @@ def make_train(config, env, env_params):
                 # Increment update counter in train_state
                 train_state = train_state.replace(n_updates=train_state.n_updates + 1)
 
-                # Log metrics from loss fn
-                jax.lax.cond(
-                    train_state.n_updates % config["LEARNER_LOG_PERIOD"] == 0,
-                    lambda d: jax.debug.callback(logger.metrics, d),
-                    lambda d: None,
-                    metrics
-                )
+                return train_state, buffer_state, metrics, log_info, grads, rng
 
-                jax.lax.cond(
-                    train_state.n_updates % config["LEARNER_EXTRA_LOG_PERIOD"] == 0,
-                    lambda d: jax.debug.callback(logger.learner_log_extra, d),
-                    lambda d: None,
-                    log_info
-                )
-
-                return train_state, buffer_state, rng
-
-            # Check learning conditions (timesteps > LEARNING_STARTS, buffer.can_sample)
-            # Use jax.lax.cond to call perform_learn_step or do nothing
-            # train_state, buffer_state = jax.lax.cond(...)
-            train_state, buffer_state, rng = jax.lax.cond(
-                (train_state.timesteps > config["LEARNING_STARTS"]) & buffer.can_sample(buffer_state),
+            ##############################
+            # 1. Learner update
+            ##############################
+            is_learn_time = (train_state.timesteps > config["LEARNING_STARTS"]) & buffer.can_sample(buffer_state)
+            train_state, buffer_state, metrics, log_info, grads, rng = jax.lax.cond(
+                is_learn_time,
                 lambda ts, bs, r: _learn_step(ts, bs, r),
                 lambda ts, bs, r: (ts, bs, r),
                 train_state,
@@ -999,11 +1009,9 @@ def make_train(config, env, env_params):
                 rng
             )
 
-            # --- 4. Update Target Network ---
-            # Periodically copy online_params to target_network_params in train_state
-            # Use optax.incremental_update to update target_network_params
+            # update target network
             train_state = jax.lax.cond(
-                train_state.timesteps % config["TARGET_UPDATE_INTERVAL"] == 0,
+                train_state.n_updates % config["TARGET_UPDATE_INTERVAL"] == 0,
                 lambda train_state: train_state.replace(
                     target_network_params=optax.incremental_update(
                         train_state.params,
@@ -1015,8 +1023,40 @@ def make_train(config, env, env_params):
                 operand=train_state,
             )
 
-            # --- 5. Logging / Evaluation ---
-            # TODO: Periodically log learner metrics and run evaluation rollouts
+            ##############################
+            # 3. Logging learner metrics + evaluation episodes
+            ##############################
+            is_log_time = jnp.logical_and(
+                is_learn_time, train_state.n_updates % config["LEARNER_LOG_PERIOD"] == 0
+            )
+
+            jax.lax.cond(
+                is_log_time,
+                lambda: logger.metrics_logger(train_state, metrics),
+                lambda: None,
+            )
+
+            # Log extra learner plots
+            is_extra_log_time = jnp.logical_and(
+                is_learn_time, train_state.n_updates % config["LEARNER_EXTRA_LOG_PERIOD"] == 0
+            )
+            jax.lax.cond(
+                is_extra_log_time,
+                lambda d: logger.extra_logger(d),
+                lambda d: None,
+                log_info
+            )
+
+            # Log gradients
+            is_grad_log_time = jnp.logical_and(
+                is_learn_time, train_state.n_updates % config["GRADIENT_LOG_PERIOD"] == 0
+            )
+
+            jax.lax.cond(
+                is_grad_log_time,
+                lambda: logger.gradient_logger(train_state, grads),
+                lambda: None,
+            )
 
             # --- 6. Return updated states ---
             return (train_state, timestep, agent_state, buffer_state, rng), {}
@@ -1050,9 +1090,9 @@ if __name__ == "__main__":
         "NUM_ENVS": 32,  # Number of parallel environments (PureJaxRL DQN used 10, can increase)
 
         # --- Training Loop Settings ---
-        "TOTAL_TIMESTEPS": 1_000_000,  # Total environment steps
-        "TRAINING_INTERVAL": 5,   # How many env steps per actor sequence collection
-        "LEARNING_STARTS": 10_000, # Timesteps before learning begins
+        "TOTAL_TIMESTEPS": 1_000_000,    # Total environment steps
+        "TRAINING_INTERVAL": 5,          # How many env steps per actor sequence collection
+        "LEARNING_STARTS": 10_000,       # Timesteps before learning begins
         "TARGET_UPDATE_INTERVAL": 1_000, # How many LEARNER UPDATES between target network syncs (R2D2 uses ~2500 steps)
 
         # --- Network Settings ---
@@ -1071,10 +1111,10 @@ if __name__ == "__main__":
         "TAU": 1.0,
 
         # --- Buffer Settings ---
-        "BUFFER_SIZE": 50_000,      # Total transitions in buffer (R2D2 often uses 1M+, adjust based on memory)
-        "BUFFER_BATCH_SIZE": 64,   # Batch size sampled from buffer for learning (e.g., 32, 64)
-        "SEQUENCE_LENGTH": 40,     # Length of sequences sampled from buffer (R2D2 uses ~80)
-        "PERIOD": 1,               # Store sequences overlapping by N-1 steps (1 is standard)
+        "BUFFER_SIZE": 50_000,     # Total transitions in buffer (R2D2 often uses 1M+, adjust based on memory)
+        "TOTAL_BATCH_SIZE": 1280,  # Total transitions sampled from buffer
+        "SAMPLE_BATCH_SIZE": 32,   # Batch size sampled from buffer for learning (e.g., 32, 64)
+        "SAMPLING_PERIOD": 1,      # Store sequences overlapping by N-1 steps (1 is standard)
 
         # --- Loss Function Settings ---
         "GAMMA": 0.99,             # Discount factor
@@ -1084,21 +1124,21 @@ if __name__ == "__main__":
         "DYNA_COEFF": 1.0,         # Weight for the loss on simulated data (DynaLossFn default 1.0)
 
         # --- Dyna Simulation Settings ---
-        "NUM_SIMULATIONS": 2,      # Number of parallel simulations per starting state (DynaLossFn default 2)
+        "NUM_SIMULATIONS": 2,       # Number of parallel simulations per starting state (DynaLossFn default 2)
         "SIMULATION_LENGTH": 10,    # Length of each simulated rollout (DynaLossFn default 5)
         "WINDOW_SIZE": 1,           # Number of windows to use, must be 1 for DynaLossFn
 
         # --- Actor Settings (Exploration) ---
         # Choose one exploration strategy
-        "NUM_EPSILONS": 256,
-        "EPSILON_MIN": 0.05,
-        "EPSILON_MAX": 0.9,
-        "EPSILON_BASE": 0.1,
+        "NUM_EPSILONS": 256,        # Number of epsilon schedules
+        "EPSILON_MIN": 0.05,        # Minimum epsilon
+        "EPSILON_MAX": 0.9,         # Maximum epsilon
+        "EPSILON_BASE": 0.1,        # Base epsilon
 
         # --- Miscellaneous ---
         "SEED": 42,
         "LEARNER_LOG_PERIOD": 500,  # How many LEARNER UPDATES between logging losses/metrics
-        "LEARNER_EXTRA_LOG_PERIOD": 5_000,
+        "LEARNER_EXTRA_LOG_PERIOD": 5_000, # How many LEARNER UPDATES between extra logging
     }
 
     # Create env and env_params
