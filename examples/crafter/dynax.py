@@ -357,50 +357,43 @@ class Logger:
 
 # --- Network Definition ---
 
-# Encoder
-class Encoder(nn.Module):
-    """
-    Simple observation encoder for Craftax-like environments.
-
-    Assumes:
-    - Input 'obs' is the image tensor directly.
-    - No normalization is applied.
-    - ReLU activation is used between hidden layers.
-    - Only processes the image input (no achievable/action).
-    """
-
-    hidden_dim: int = 512  # Dimension of the output features and hidden layers
-    num_layers: int = 1    # Total number of Dense layers (must be >= 1)
-    use_bias: bool = True    # Whether Dense layers should use bias terms
+# MLP head
+class MLP(nn.Module):
+    hidden_dim: int
+    out_dim: Optional[int] = None
+    num_layers: int = 1
+    use_bias: bool = True
 
     @nn.compact
-    def __call__(self, obs: jnp.ndarray):
-        """
-        Processes an observation (assumed to be image data) into features.
+    def __call__(self, x):
+        for _ in range(self.num_layers):
+            x = nn.Dense(self.hidden_dim, use_bias=self.use_bias)(x)
+            x = jax.nn.leaky_relu(x)
 
-        Args:
-            obs: The observation data, assumed to be the image tensor.
-
-        Returns:
-            A tensor representing the encoded features of the image.
-        """
-        assert self.num_layers >= 1, "num_layers must be at least 1"
-
-        x = obs
-        for i in range(self.num_layers - 1):
-            x = nn.Dense(features=self.hidden_dim, use_bias=self.use_bias, name=f"hidden_{i}")(x)
-            x = nn.relu(x)
-        output_features = nn.Dense(features=self.hidden_dim, use_bias=self.use_bias, name="output_layer")(x)
-
-        return output_features
+        x = nn.Dense(self.out_dim or self.hidden_dim, use_bias=self.use_bias)(x)
+        return x
 
 # Agent
 # Based on ScannedRNN from PureJaxRL
 class DynaAgent(nn.Module):
     config: dict
     encoder: Encoder
+    q_head: MLP
     env: TimestepWrapper
     env_params: Any
+
+    def setup(self):
+        self.encoder = MLP(
+            hidden_dim=self.config["ENCODER_HIDDEN_DIM"],
+            num_layers=self.config["NUM_ENCODER_LAYERS"],
+            use_bias=self.config["USE_BIAS"],
+        )
+        self.q_head = MLP(
+            hidden_dim=self.config["Q_HIDDEN_DIM"],
+            out_dim=self.env.action_space(self.env_params).n,
+            num_layers=self.config["NUM_Q_LAYERS"],
+            use_bias=self.config["USE_BIAS"],
+        )
 
     @functools.partial(
         nn.scan,
@@ -409,7 +402,6 @@ class DynaAgent(nn.Module):
         out_axes=0,
         split_rngs={"params": False},
     )
-    @nn.compact
     def __call__(self, carry, x):
         """Applies the module."""
         hidden_size = self.config["RNN_HIDDEN_DIM"]
@@ -421,9 +413,10 @@ class DynaAgent(nn.Module):
             rnn_state,
         )
         embeds = self.encoder(ins)
-        new_rnn_state, y = nn.GRUCell()(rnn_state, embeds)
-        preds = Predictions(q_vals=y, state=new_rnn_state)
-        return new_rnn_state, preds
+        next_rnn_state, y = nn.GRUCell()(rnn_state, embeds)
+        q_vals = self.q_head(y)
+        preds = Predictions(q_vals=q_vals, state=next_rnn_state)
+        return next_rnn_state, preds
 
     @staticmethod
     def initialize_carry(batch_size, hidden_size):
@@ -1064,11 +1057,10 @@ if __name__ == "__main__":
 
         # --- Network Settings ---
         "RNN_HIDDEN_DIM": 256,     # Size of RNN hidden state (Dyna code used 256)
-        "MLP_HIDDEN_DIM": 512,     # Hidden dim for observation encoder MLP
-        "NUM_MLP_LAYERS": 1,       # Layers for observation encoder MLP
-        # "Q_HIDDEN_DIM": 512,       # Hidden dim for Q-head MLP (Dyna code used 512)
-        # "NUM_Q_LAYERS": 1,         # Layers for Q-head MLP (Dyna code used 1)
-        # "ACTIVATION": "relu",      # Activation function
+        "ENCODER_HIDDEN_DIM": 512, # Hidden dim for observation encoder MLP
+        "NUM_ENCODER_LAYERS": 0,   # Hidden layers for observation encoder MLP
+        "Q_HIDDEN_DIM": 512,       # Hidden dim for Q-head MLP (Dyna code used 512)
+        "NUM_Q_LAYERS": 2,         # Hidden layers for Q-head MLP (Dyna code used 1)
         "USE_BIAS": True,          # Whether to use bias in Dense layers
 
         # --- Optimizer Settings ---
@@ -1079,7 +1071,7 @@ if __name__ == "__main__":
         "TAU": 1.0,
 
         # --- Buffer Settings ---
-        "BUFFER_SIZE": 50000,      # Total transitions in buffer (R2D2 often uses 1M+, adjust based on memory)
+        "BUFFER_SIZE": 50_000,      # Total transitions in buffer (R2D2 often uses 1M+, adjust based on memory)
         "BUFFER_BATCH_SIZE": 64,   # Batch size sampled from buffer for learning (e.g., 32, 64)
         "SEQUENCE_LENGTH": 40,     # Length of sequences sampled from buffer (R2D2 uses ~80)
         "PERIOD": 1,               # Store sequences overlapping by N-1 steps (1 is standard)
