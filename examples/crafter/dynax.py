@@ -257,7 +257,7 @@ def simulate_n_trajectories(
         rng, rng_ = jax.random.split(rng)
 
         # apply world model to get next timestep
-        next_timestep = agent.apply_world_model(timestep.state, a, rng_)
+        next_timestep = agent.apply_world_model(timestep, a, rng_)
 
         # Format inputs for apply fn
         obs, discount = next_timestep.observation, next_timestep.discount
@@ -433,18 +433,18 @@ class DynaAgent(nn.Module):
         )
     
     # NOTE: changed signature to be more general -> state is now a struct.PyTreeNode
-    def apply_world_model(self, state: struct.PyTreeNode, action: jax.Array, rng: jax.Array) -> struct.PyTreeNode:
+    def apply_world_model(self, timestep: struct.PyTreeNode, action: jax.Array, rng: jax.Array) -> struct.PyTreeNode:
         """
         Simulates one step using the 'world model' (ground truth env).
         """
         # vmap the step function
-        vmap_step = lambda num_envs: lambda rng, state, action: jax.vmap(
+        vmap_step = lambda num_envs: lambda rng, timestep, action: jax.vmap(
             self.env.step, in_axes=(0, 0, 0, None)
-        )(jax.random.split(rng, num_envs), state, action, self.env_params)
+        )(jax.random.split(rng, num_envs), timestep, action, self.env_params)
         
         # Implement ground truth env.step call
-        next_state = vmap_step(self.config["NUM_ENVS"])(rng, state, action)
-        return next_state
+        next_timestep = vmap_step(self.config["NUM_ENVS"])(rng, timestep, action)
+        return next_timestep
 
 # --- Loss Function ---
 
@@ -783,9 +783,9 @@ def make_train(config, env, env_params):
     vmap_reset = lambda num_envs: lambda rng: jax.vmap(env.reset, in_axes=(0, None))(
         jax.random.split(rng, num_envs), env_params
     )
-    vmap_step = lambda num_envs: lambda rng, state, action: jax.vmap(
+    vmap_step = lambda num_envs: lambda rng, timestep, action: jax.vmap(
         env.step, in_axes=(0, 0, 0, None)
-    )(jax.random.split(rng, num_envs), state, action, env_params)
+    )(jax.random.split(rng, num_envs), timestep, action, env_params)
 
     logger = Logger(config)
 
@@ -898,7 +898,7 @@ def make_train(config, env, env_params):
             action = actor_policy.choose_actions(q_vals, act_rng)
 
             # Get next timestep
-            next_timestep = vmap_step(config["NUM_ENVS"])(env_rng, timestep.state, action)
+            next_timestep = vmap_step(config["NUM_ENVS"])(env_rng, timestep, action)
 
             # Create transition
             transition = Transition(timestep=next_timestep, action=action, agent_state=next_agent_state)
