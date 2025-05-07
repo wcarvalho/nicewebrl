@@ -11,7 +11,6 @@ import numpy as np
 from typing import Optional, Any
 from craftax.craftax_env import make_craftax_env_from_name
 from nicewebrl.nicejax import TimestepWrapper
-from jaxneurorl import losses
 import rlax
 import matplotlib.pyplot as plt
 import wandb
@@ -79,7 +78,6 @@ class SimulationOutput:
 
 # --- Helper Functions ---
 
-# --- Simulation policy ---
 def make_float(x):
     return x.astype(jnp.float32)
 
@@ -153,7 +151,65 @@ class FixedEpsilonGreedy:
     rng = jax.random.split(rng, q_vals.shape[0])
     return jax.vmap(epsilon_greedy_act, in_axes=(0, 0, 0))(q_vals, self.epsilons, rng)
 
-# Rolling window logic
+# --- Loss Function Helpers ---
+def q_learning_lambda_target(
+    q_t: jax.Array,
+    r_t: jax.Array,
+    discount_t: jax.Array,
+    is_last_t: jax.Array,
+    a_t: jax.Array,
+    lambda_: jax.Array,
+    stop_target_gradients: bool = True,
+) -> jax.Array:
+    """MINOR change to rlax.lambda_returns to incorporate is_last_t.
+
+    lambda_ = jax.numpy.ones_like(discount_t) * lambda_ * (1 - is_last_t).
+                                            ONLY CHANGE:^
+    """
+    v_t = rlax.batched_index(q_t, a_t)
+    lambda_ = jax.numpy.ones_like(discount_t) * lambda_ * (1 - is_last_t)
+    target_tm1 = rlax.lambda_returns(
+        r_t, discount_t, v_t, lambda_, stop_target_gradients=stop_target_gradients
+    )
+    return target_tm1
+
+
+def q_learning_lambda_td(
+    q_tm1: jax.Array,
+    a_tm1: jax.Array,
+    target_q_t: jax.Array,
+    a_t: jax.Array,
+    r_t: jax.Array,
+    discount_t: jax.Array,
+    is_last_t: jax.Array,
+    lambda_: jax.Array,
+    stop_target_gradients: bool = True,
+    tx_pair: rlax.TxPair = rlax.IDENTITY_PAIR,
+):
+    """Essentially the same as rlax.q_lambda except we use selector actions on q-values, not average. This makes it like Q-learning.
+
+    Other difference is is_last_t is here.
+    """
+
+    # Apply signed hyperbolic transform to Q-values
+    q_tm1_transformed = tx_pair.apply(q_tm1)
+    target_q_t_transformed = tx_pair.apply(target_q_t)
+
+    v_tm1 = rlax.batched_index(q_tm1_transformed, a_tm1)
+    target_mt1 = q_learning_lambda_target(
+        r_t=r_t,
+        q_t=target_q_t_transformed,
+        a_t=a_t,
+        discount_t=discount_t,
+        is_last_t=is_last_t,
+        lambda_=lambda_,
+        stop_target_gradients=stop_target_gradients,
+    )
+
+    v_tm1, target_mt1 = tx_pair.apply_inv(v_tm1), tx_pair.apply_inv(target_mt1)
+
+    return v_tm1, target_mt1
+
 @partial(jax.jit, static_argnums=(1,))
 def rolling_window(a, size: int):
     """Create rolling windows of a specified size from an input array.
@@ -485,7 +541,7 @@ class DynaLossFn:
         lambda_ = jnp.ones_like(non_terminal) * self.lambda_
 
         # Get N-step transformed TD error and loss.
-        batch_td_error_fn = jax.vmap(losses.q_learning_lambda_td, in_axes=1, out_axes=1)
+        batch_td_error_fn = jax.vmap(q_learning_lambda_td, in_axes=1, out_axes=1)
 
         # [T, B]
         selector_actions = jnp.argmax(online_preds.q_vals, axis=-1)  # [T+1, B]
@@ -529,7 +585,7 @@ class DynaLossFn:
         # We map over the batch dimension (axis 1)
         # We vmap it to handle the batch dimension [T, B, ...] -> [T, B] output
         # Get N-step transformed TD error and loss.
-        batch_td_error_fn = jax.vmap(losses.q_learning_lambda_td, in_axes=1, out_axes=1)
+        batch_td_error_fn = jax.vmap(q_learning_lambda_td, in_axes=1, out_axes=1)
         q_t, target_q_t = batch_td_error_fn(
             q_tm1,        # [T, B, A] -> processed as B sequences of [T, A]
             a_tm1,        # [T, B]   -> processed as B sequences of [T]
@@ -1165,7 +1221,6 @@ if __name__ == "__main__":
         config=config,
         mode=config["WANDB_MODE"],
     )
-
 
     # Call make_train(config, env, env_params)
     rng = jax.random.PRNGKey(config["SEED"])
