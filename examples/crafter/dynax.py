@@ -146,7 +146,7 @@ class FixedEpsilonGreedy:
   def __init__(self, epsilons: float):
     self.epsilons = epsilons
 
-  @partial(jax.jit, static_argnums=0)
+  @functools.partial(jax.jit, static_argnums=0)
   def choose_actions(self, q_vals: jnp.ndarray, rng: jax.random.PRNGKey):
     rng = jax.random.split(rng, q_vals.shape[0])
     return jax.vmap(epsilon_greedy_act, in_axes=(0, 0, 0))(q_vals, self.epsilons, rng)
@@ -210,7 +210,7 @@ def q_learning_lambda_td(
 
     return v_tm1, target_mt1
 
-@partial(jax.jit, static_argnums=(1,))
+@functools.partial(jax.jit, static_argnums=(1,))
 def rolling_window(a, size: int):
     """Create rolling windows of a specified size from an input array.
 
@@ -453,8 +453,6 @@ class MLP(nn.Module):
 # Based on ScannedRNN from PureJaxRL
 class DynaAgent(nn.Module):
     config: dict
-    encoder: Encoder
-    q_head: MLP
     env: TimestepWrapper
     env_params: Any
 
@@ -501,7 +499,6 @@ class DynaAgent(nn.Module):
             jax.random.PRNGKey(0), (batch_size,), hidden_size
         )
     
-    # NOTE: changed signature to be more general -> state is now a struct.PyTreeNode
     def apply_world_model(self, timestep: struct.PyTreeNode, action: jax.Array, rng: jax.Array) -> struct.PyTreeNode:
         """
         Simulates one step using the 'world model' (ground truth env).
@@ -760,8 +757,8 @@ class DynaLossFn:
         window_size = self.config["WINDOW_SIZE"]
         window_size = min(window_size, len(actions))
         window_size = max(window_size, 1)
-        roll = partial(rolling_window, size=window_size)
-        simulate = partial(
+        roll = functools.partial(rolling_window, size=window_size)
+        simulate = functools.partial(
             simulate_n_trajectories,
             agent=self.agent,
             params=online_params,
@@ -874,14 +871,10 @@ def make_train(config):
         init_timestep = vmap_reset(config["NUM_ENVS"])(_rng)
 
         # Initialize DynaAgent
-        encoder = Encoder(
-            hidden_dim=config["MLP_HIDDEN_DIM"],
-            num_layers=config["NUM_MLP_LAYERS"],
-            use_bias=config["USE_BIAS"],
-        )
         agent = DynaAgent(
             config=config,
-            encoder=encoder,
+            env=env,
+            env_params=env_params,
         )
         rng, init_rng = jax.random.split(rng)
         init_x = (
