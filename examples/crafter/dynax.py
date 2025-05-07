@@ -313,7 +313,8 @@ class Logger:
                     f"{key}/num_learner_updates": ts.n_updates,
                 }
             )
-            wandb.log(m)
+            if wandb.run is not None:
+                wandb.log(m)
         jax.debug.callback(callback, train_state, metrics)
     
     def gradient_logger(self, train_state, grads):
@@ -328,7 +329,8 @@ class Logger:
                 f"{key}/num_learner_updates": ts.n_updates,
                 }
             )
-            wandb.log(g)
+            if wandb.run is not None:
+                wandb.log(g)
 
         jax.debug.callback(callback, train_state, gradient_metrics)
 
@@ -790,7 +792,13 @@ class DynaLossFn:
 
 # --- Training Loop Structure (Conceptual) ---
 
-def make_train(config, env, env_params):
+def make_train(config):
+    # Create env and env_params
+    env = make_craftax_env_from_name(config["ENV_NAME"], auto_reset=False)
+    env = TimestepWrapper(env)
+    env_params = env.default_params
+
+    # Vmap over environment
     vmap_reset = lambda num_envs: lambda rng: jax.vmap(env.reset, in_axes=(0, None))(
         jax.random.split(rng, num_envs), env_params
     )
@@ -1135,17 +1143,33 @@ if __name__ == "__main__":
         "EPSILON_MAX": 0.9,         # Maximum epsilon
         "EPSILON_BASE": 0.1,        # Base epsilon
 
-        # --- Miscellaneous ---
-        "SEED": 42,
+        # --- Logging ---
         "LEARNER_LOG_PERIOD": 500,  # How many LEARNER UPDATES between logging losses/metrics
+        "GRADIENT_LOG_PERIOD": 500, # How many GRADIENT UPDATES between logging losses/metrics
         "LEARNER_EXTRA_LOG_PERIOD": 5_000, # How many LEARNER UPDATES between extra logging
+
+        # --- Miscellaneous ---
+        "SEED": 1,
+        "NUM_SEEDS": 1,
+        "ENTITY": "hoonshin",
+        "PROJECT": "dyna-crafter",
+        "WANDB_MODE": "online",
     }
 
-    # Create env and env_params
-    env = make_craftax_env_from_name("Craftax-Symbolic-v1", auto_reset=False)
-    env = TimestepWrapper(env)
-    env_params = env.default_params
+    # Initialize wandb
+    wandb.init(
+        entity=config["ENTITY"],
+        project=config["PROJECT"],
+        tags=["Dyna", config["ENV_NAME"].upper(), f"jax_{jax.__version__}"],
+        name=f'dyna_crafter',
+        config=config,
+        mode=config["WANDB_MODE"],
+    )
+
 
     # Call make_train(config, env, env_params)
-    train = make_train(config, env, env_params)
-    train(jax.random.PRNGKey(config["SEED"]))
+    rng = jax.random.PRNGKey(config["SEED"])
+    rngs = jax.random.split(rng, config["NUM_SEEDS"])
+
+    train_vjit = jax.jit(jax.vmap(make_train(config)))
+    outs = jax.block_until_ready(train_vjit(rngs))
