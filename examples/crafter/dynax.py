@@ -686,7 +686,7 @@ class DynaLossFn:
         print("LOG INFO:", jax.tree_map(lambda x: x.shape, log_info))
 
         # update L_online
-        L_online = batch_loss
+        L_online = jnp.mean(batch_loss)
 
         # update metrics
         all_metrics.update({f"{k}/online": v for k, v in metrics.items()})
@@ -729,7 +729,7 @@ class DynaLossFn:
                 loss_mask,
                 jax.random.split(rng, B),
             )
-            L_dyna += self.dyna_coeff * dyna_batch_loss
+            L_dyna = jnp.mean(dyna_batch_loss)
 
             # update metrics with dyna metrics
             all_metrics.update({f"{k}/dyna": v for k, v in dyna_metrics.items()})
@@ -738,9 +738,9 @@ class DynaLossFn:
 
         # --- 3. Combine Losses ---
         # TODO: Add importance sampling weights if using prioritized replay
-        total_loss = self.config["ONLINE_COEFF"] * jnp.mean(L_online) + self.config["DYNA_COEFF"] * L_dyna
+        total_loss = self.config["ONLINE_COEFF"] * L_online + self.config["DYNA_COEFF"] * L_dyna
 
-        return td_error, total_loss, all_metrics, all_log_info
+        return total_loss, (td_error, all_metrics, all_log_info)
     
     def dyna_loss_fn(
         self,
@@ -809,29 +809,35 @@ class DynaLossFn:
                 x_t=t,
                 rng=key_,
             )
-
+            
+            print("NEXT T:", jax.tree_map(lambda x: x.shape, next_t))
             print("SIMULATED OUTPUTS:", jax.tree_map(lambda x: x.shape, sim_outputs_t))
 
             # we replace last, because last action from data
             # is different than action from simulation
             # [window_size + sim_length, num_sims, ...]
-            all_but_last = lambda y: jax.tree.map(lambda x: x[:-1], y)
-            all_t = concat_start_sims(all_but_last(t), next_t)
-            all_a = concat_start_sims(all_but_last(a), sim_outputs_t.actions)
+            # all_but_last = lambda y: jax.tree_map(lambda x: x[:-1], y)
+            # all_t = concat_start_sims(all_but_last(t), next_t)
+            # all_a = concat_start_sims(all_but_last(a), sim_outputs_t.actions)
+            all_t = next_t
+            all_a = sim_outputs_t.actions
 
             # NOTE: we're recomputing RNN but easier to read this way...
             resets = 1.0 - all_t.discount
             xs = (all_t.observation, resets)
 
-            h_on_init = jax.tree.map(lambda x: x[0], h_on)
-            h_on_init = repeat(h_on_init, self.config["NUM_SIMULATIONS"])
-            h_tar_init = jax.tree.map(lambda x: x[0], h_tar)
-            h_tar_init = repeat(h_tar_init, self.config["NUM_SIMULATIONS"])
+            # h_on_init = jax.tree_map(lambda x: x[0], h_on)
+            # h_on_init = repeat(h_on_init, self.config["NUM_SIMULATIONS"])
+            # h_tar_init = jax.tree_map(lambda x: x[0], h_tar)
+            # h_tar_init = repeat(h_tar_init, self.config["NUM_SIMULATIONS"])
+
+            h_on_init = repeat(h_on, self.config["NUM_SIMULATIONS"])
+            h_tar_init = repeat(h_tar, self.config["NUM_SIMULATIONS"])
 
             _, online_preds = self.agent.apply(online_params, h_on_init, xs)
             _, target_preds = self.agent.apply(target_params, h_tar_init, xs)
 
-            all_t_mask = simulation_finished_mask(l_mask, next_t)
+            all_t_mask = simulation_finished_mask(l_mask[None], next_t)
 
             batch_td_error, batch_loss_mean, metrics, log_info = self.batch_loss(
                 timestep=all_t,
@@ -843,6 +849,12 @@ class DynaLossFn:
                 non_terminal=all_t.discount,
                 loss_mask=all_t_mask,
             )
+
+            print("BATCH TD ERROR:", batch_td_error.shape)
+            print("BATCH LOSS MEAN:", batch_loss_mean.shape)
+            print("METRICS:", jax.tree_map(lambda x: x.shape, metrics))
+            print("LOG INFO:", jax.tree_map(lambda x: x.shape, log_info))
+
             return batch_td_error, batch_loss_mean, metrics, log_info
         
         # Vmap over each window
@@ -938,13 +950,6 @@ def make_train(config):
             can_sample=jax.jit(buffer.can_sample),
         )
 
-        # dummy_timestep = TimeStep(
-        #     observation=jnp.zeros((env.observation_space(env_params).shape[0],)),
-        #     reward=jnp.array(0),
-        #     discount=jnp.array(0),
-        #     step_type=StepType.FIRST,
-        #     state=None,
-        # )
         dummy_timestep = jax.tree_map(lambda x: jnp.zeros_like(x[0]), init_timestep)
         dummy_transition = Transition(
             timestep=dummy_timestep,
@@ -1056,7 +1061,7 @@ def make_train(config):
                 # Call jax.value_and_grad(loss_fn.calculate_loss, has_aux=True)(...)
                 #       - Pass online_params, target_params, model_params, learn_batch, initial_states, rng
                 #       - Returns: (td_error, loss, metrics, log_info), grads
-                (td_error, loss, metrics, log_info), grads = jax.value_and_grad(loss_fn.total_loss, has_aux=True)(
+                (loss, (td_error, metrics, log_info)), grads = jax.value_and_grad(loss_fn.total_loss, has_aux=True)(
                     train_state.params,
                     train_state.target_params,
                     sampled_batch,
@@ -1082,11 +1087,12 @@ def make_train(config):
             ##############################
             # 1. Learner update
             ##############################
+            # TODO: match up shapes for true and false
             is_learn_time = (train_state.timesteps > config["LEARNING_STARTS"]) & buffer.can_sample(buffer_state)
             train_state, buffer_state, metrics, log_info, grads, rng = jax.lax.cond(
                 is_learn_time,
                 lambda ts, bs, r: _learn_step(ts, bs, r),
-                lambda ts, bs, r: (ts, bs, r),
+                lambda ts, bs, r: (ts, bs, r, None, None, r),
                 train_state,
                 buffer_state,
                 rng
