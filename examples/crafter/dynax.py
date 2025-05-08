@@ -51,7 +51,6 @@ class Transition:
     action: jax.Array       # Action taken at time t (a_t)
     agent_state: jax.Array # Agent's RNN state *before* processing timestep t (h_{t-1})
 
-@struct.dataclass
 class CustomTrainState(TrainState):
     target_params: flax.core.FrozenDict
     timesteps: int
@@ -282,12 +281,11 @@ def simulate_n_trajectories(
         obs = obs[np.newaxis, :]
         discount = discount[np.newaxis, :]
         resets = 1.0 - discount
-        x = (obs, resets)
-        h_t, preds = agent.apply(params, h_tm1, x)
+        inputs = (obs, resets)
+        h_t, preds = agent.apply(params, h_tm1, inputs)
         
         # remove time dim
-        h_t = jax.tree.map(lambda h: h.squeeze(0), h_t)
-        preds = jax.tree.map(lambda p: p.squeeze(0), preds)
+        preds = jax.tree_map(lambda p: p.squeeze(0), preds)
 
         return x, h_t, preds
 
@@ -300,7 +298,8 @@ def simulate_n_trajectories(
     # replace (x_t, task) with N-copies
     x_t = jax.tree_map(lambda x: jnp.repeat(x[None], num_simulations, axis=0), x_t)
     h_tm1 = jax.tree_map(lambda x: jnp.repeat(x[None], num_simulations, axis=0), h_tm1)
-    x_t, h_t, preds_t = jax.vmap(initial_predictions, in_axes=(0, 0))(x_t, h_tm1)
+
+    x_t, h_t, preds_t = initial_predictions(x_t, h_tm1)
 
     # choose epsilon-greedy action
     a_t = policy_fn(preds_t.q_vals, rng_)
@@ -312,6 +311,10 @@ def simulate_n_trajectories(
         # 1. use state + action to predict next state
         ###########################
         rng, rng_ = jax.random.split(rng)
+
+        print("timestep:", jax.tree_map(lambda x: x.shape, timestep))
+        print("agent_state:", agent_state.shape)
+        print("action:", a.shape)
 
         # apply world model to get next timestep
         next_timestep = agent.apply_world_model(timestep, a, rng_)
@@ -327,7 +330,6 @@ def simulate_n_trajectories(
         next_agent_state, next_preds = agent.apply(params, agent_state, x)
 
         # remove time dim
-        next_agent_state = jax.tree.map(lambda x: x.squeeze(0), next_agent_state)
         next_preds = jax.tree.map(lambda x: x.squeeze(0), next_preds)
 
         # get next actions
@@ -451,93 +453,6 @@ class MLP(nn.Module):
         return x
 
 # Agent
-# Based on ScannedRNN from PureJaxRL
-# class DynaAgent(nn.Module):
-#     config: dict
-#     env: TimestepWrapper
-#     env_params: Any
-
-#     def setup(self):
-#         self.encoder_hidden_dim = self.config["ENCODER_HIDDEN_DIM"]
-#         self.num_encoder_layers = self.config["NUM_ENCODER_LAYERS"]
-#         self.q_hidden_dim = self.config["Q_HIDDEN_DIM"]
-#         self.num_q_layers = self.config["NUM_Q_LAYERS"]
-#         self.rnn_hidden_dim = self.config["RNN_HIDDEN_DIM"]
-#         self.num_rnn_layers = self.config["NUM_RNN_LAYERS"]
-#         self.num_envs = self.config["NUM_ENVS"]
-#         self.use_bias = self.config["USE_BIAS"]
-#         self.num_actions = self.env.action_space(self.env_params).n
-
-#         self.encoder = MLP(
-#             hidden_dim=self.encoder_hidden_dim,
-#             num_layers=self.num_encoder_layers,
-#             use_bias=self.use_bias,
-#             name="encoder_mlp",
-#         )
-#         self.q_head = MLP(
-#             hidden_dim=self.q_hidden_dim,
-#             out_dim=self.num_actions,
-#             num_layers=self.num_q_layers,
-#             use_bias=self.use_bias,
-#             name="q_head_mlp",
-#         )
-#         self.rnn = nn.GRUCell(
-#             features=self.rnn_hidden_dim,
-#             name="gru_cell"
-#         )
-    
-#     # @staticmethod
-#     # def initialize_carry(rnn_cell: nn.GRUCell, batch_size: int, hidden_size: int):
-#     #     """Initializes the carry state for the given RNN cell."""
-#     #     return rnn_cell.initialize_carry(
-#     #         rng=jax.random.PRNGKey(0), # Dummy key for zero initialization
-#     #         input_shape=(batch_size, hidden_size),
-#     #     )
-
-#     @functools.partial(
-#         nn.scan,
-#         variable_broadcast="params",
-#         in_axes=0,
-#         out_axes=0,
-#         split_rngs={"params": False},
-#     )
-#     def __call__(self, carry, x):
-#         """Applies the module."""
-#         hidden_size = self.rnn_hidden_dim
-#         rnn_state = carry
-#         ins, resets = x
-#         rnn_state = jnp.where(
-#             resets[:, np.newaxis],
-#             self.initialize_carry(hidden_size, (self.num_envs, self.encoder_hidden_dim)),
-#             rnn_state,
-#         )
-#         embeds = self.encoder(ins)
-#         next_rnn_state, y = self.rnn(rnn_state, embeds)
-#         q_vals = self.q_head(y)
-#         preds = Predictions(q_vals=q_vals, state=next_rnn_state)
-#         return next_rnn_state, preds
-
-#     @staticmethod
-#     def initialize_carry(rnn_cell, input_shape):
-#         # Use a dummy key since the default state init fn is just zeros.
-#         return rnn_cell.initialize_carry(
-#             rng=jax.random.PRNGKey(0),
-#             input_shape=input_shape,
-#         )
-
-#     def apply_world_model(self, timestep: struct.PyTreeNode, action: jax.Array, rng: jax.Array) -> struct.PyTreeNode:
-#         """
-#         Simulates one step using the 'world model' (ground truth env).
-#         """
-#         # vmap the step function
-#         vmap_step = lambda num_envs: lambda rng, timestep, action: jax.vmap(
-#             self.env.step, in_axes=(0, 0, 0, None)
-#         )(jax.random.split(rng, num_envs), timestep, action, self.env_params)
-        
-#         # Implement ground truth env.step call
-#         next_timestep = vmap_step(self.config["NUM_ENVS"])(rng, timestep, action)
-#         return next_timestep
-
 class DynaAgent(nn.Module):
     config: dict
     env: TimestepWrapper
@@ -600,16 +515,17 @@ class DynaAgent(nn.Module):
     def initialize_carry(batch_size, hidden_size):
         return jnp.zeros((batch_size, hidden_size))
 
-    def apply_world_model(self, timestep: struct.PyTreeNode, action: jax.Array, rng: jax.Array) -> struct.PyTreeNode:
+    def apply_world_model(self, ts: struct.PyTreeNode, action: jax.Array, rng: jax.Array) -> struct.PyTreeNode:
         """
         Simulates one step using the 'world model' (ground truth env).
         This wraps the true `env.step` function.
         """
-        def step_fn(rng, ts, act):
-            return self.env.step(rng, ts, act, self.env_params)
-
-        rngs = jax.random.split(rng, self.num_envs)
-        next_timestep = jax.vmap(step_fn)(rngs, timestep, action)
+        
+        vmap_step = lambda num_envs: lambda rng, timestep, action: jax.vmap(
+            self.env.step, in_axes=(0, 0, 0, None)
+        )(jax.random.split(rng, num_envs), timestep, action, self.env_params)
+        print(action.shape)
+        next_timestep = vmap_step(action.shape[0])(rng, ts, action)
         return next_timestep
 
 
@@ -632,40 +548,13 @@ class DynaLossFn:
         is_last,        # [T+1, B]
         loss_mask,      # [T+1, B]
     ):
-        rewards = make_float(rewards)
-        rewards = rewards - self.step_cost
-        is_last = make_float(is_last)
-        discounts = make_float(non_terminal) * self.discount
-        lambda_ = jnp.ones_like(non_terminal) * self.lambda_
-
-        # Get N-step transformed TD error and loss.
-        batch_td_error_fn = jax.vmap(q_learning_lambda_td, in_axes=1, out_axes=1)
-
-        # [T, B]
-        selector_actions = jnp.argmax(online_preds.q_vals, axis=-1)  # [T+1, B]
-        q_t, target_q_t = batch_td_error_fn(
-            online_preds.q_vals[:-1],  # [T+1] --> [T]
-            actions[:-1],  # [T+1] --> [T]
-            target_preds.q_vals[1:],  # [T+1] --> [T]
-            selector_actions[1:],  # [T+1] --> [T]
-            rewards[1:],  # [T+1] --> [T]
-            discounts[1:],
-            is_last[1:],
-            lambda_[1:],
-        )  # [T+1] --> [T]
-
-        # ensure target = 0 when episode terminates
-        target_q_t = target_q_t * non_terminal[:-1]
-        batch_td_error = target_q_t - q_t
-        batch_td_error = batch_td_error * loss_mask[:-1]
-
-
         # 1. Prepare Inputs (similar to original)
         rewards = make_float(rewards)
         rewards = rewards - self.config["STEP_COST"]      # [T+1, B]
         is_last = make_float(is_last)
         discounts = non_terminal * self.config["GAMMA"] # [T+1, B]
-        lambda_ = self.config["TD_LAMBDA"]
+        lambda_ = jnp.ones_like(non_terminal) * self.config["TD_LAMBDA"]
+        selector_actions = jnp.argmax(online_preds.q_vals, axis=-1)  # [T+1, B]
 
         # 2. Align Time Steps
         q_tm1 = online_preds.q_vals[:-1]      # Online Q(s_t, a) [T, B, A]
@@ -673,11 +562,21 @@ class DynaLossFn:
         r_t = rewards[1:]                     # Reward r_{t+1} [T, B]
         discount_t = discounts[1:]            # Discount gamma_{t+1} [T, B]
         q_t_target = target_preds.q_vals[1:]  # Target Q(s_{t+1}, a') [T, B, A]
+        selector_actions = selector_actions[1:] # Greedy actions [T, B]
 
         is_last = is_last[1:]                 # Is last t+1 [T, B]
         loss_mask = loss_mask[:-1]            # Valid transitions mask [T, B]
         non_terminal = non_terminal[1:]       # Non-terminal mask [T, B]
+        lambda_ = lambda_[1:]                 # Lambda trimmed [T, B]
         
+        print("q_tm1:", q_tm1.shape)
+        print("a_tm1:", a_tm1.shape)
+        print("q_t_target:", q_t_target.shape)
+        print("selector_actions:", selector_actions.shape)
+        print("r_t:", r_t.shape)
+        print("discount_t:", discount_t.shape)
+        print("is_last:", is_last.shape)
+        print("lambda_:", lambda_.shape)
 
         # 3. Calculate TD Error
         # We map over the batch dimension (axis 1)
@@ -688,10 +587,11 @@ class DynaLossFn:
             q_tm1,        # [T, B, A] -> processed as B sequences of [T, A]
             a_tm1,        # [T, B]   -> processed as B sequences of [T]
             q_t_target,   # [T, B, A] -> processed as B sequences of [T, A]
+            selector_actions, # [T, B] -> processed as B sequences of [T]
             r_t,          # [T, B]   -> processed as B sequences of [T]
             discount_t,   # [T, B]   -> processed as B sequences of [T]
             is_last,      # [T, B]   -> processed as B sequences of [T]
-            lambda_,      # Scalar
+            lambda_,      # [T, B]   -> processed as B sequences of [T]
         ) # Output shape: [T, B]
 
         # 4. Apply Mask
@@ -745,6 +645,9 @@ class DynaLossFn:
         # Swap time and batch dimensions
         batch = jax.tree.map(lambda x: x.swapaxes(0, 1), batch) # [T, B, ...]
 
+        print("BATCH:")
+        print(jax.tree_map(lambda x: x.shape, batch))
+
         # Unpack batch data
         actions = batch.action # [T, B]
         timestep = batch.timestep # [T, B, ...]
@@ -776,6 +679,11 @@ class DynaLossFn:
             is_last=is_last,
             loss_mask=loss_mask,
         )
+
+        print("TD ERROR:", td_error.shape)
+        print("BATCH LOSS:", batch_loss.shape)
+        print("METRICS:", jax.tree_map(lambda x: x.shape, metrics))
+        print("LOG INFO:", jax.tree_map(lambda x: x.shape, log_info))
 
         # update L_online
         L_online = batch_loss
@@ -872,11 +780,11 @@ class DynaLossFn:
         # W = T-window_size+1 = number of windows
         # T' = window_size
         # [T, ...] --> [W, T', ...]
-        actions = jax.tree.map(roll, actions)
-        timesteps = jax.tree.map(roll, timesteps)
-        h_online = jax.tree.map(roll, h_online)
-        h_target = jax.tree.map(roll, h_target)
-        loss_mask = jax.tree.map(roll, loss_mask)
+        # actions = jax.tree.map(roll, actions)
+        # timesteps = jax.tree.map(roll, timesteps)
+        # h_online = jax.tree.map(roll, h_online)
+        # h_target = jax.tree.map(roll, h_target)
+        # loss_mask = jax.tree.map(roll, loss_mask)
 
         def _dyna_loss_fn(t, a, h_on, h_tar, l_mask, key):
             """
@@ -886,14 +794,23 @@ class DynaLossFn:
                 h_tar (jax.Array): [window_size, ...]
                 key (jax.random.PRNGKey): [2]
             """
+            # Add time dim
+            print("T:", jax.tree_map(lambda x: x.shape, t))
+            print("a:", a.shape)
+            print("h_on:", jax.tree_map(lambda x: x.shape, h_on))
+            print("h_tar:", jax.tree_map(lambda x: x.shape, h_tar))
+            print("l_mask:", jax.tree_map(lambda x: x.shape, l_mask))
+
             # get simulations starting from final timestep in window
             key, key_ = jax.random.split(key)
             # [sim_length, num_sim, ...]
             next_t, sim_outputs_t = simulate(
-                h_tm1=jax.tree.map(lambda x: x[-1], h_on),
-                x_t=jax.tree.map(lambda x: x[-1], t),
+                h_tm1=h_on,
+                x_t=t,
                 rng=key_,
             )
+
+            print("SIMULATED OUTPUTS:", jax.tree_map(lambda x: x.shape, sim_outputs_t))
 
             # we replace last, because last action from data
             # is different than action from simulation
@@ -996,7 +913,8 @@ def make_train(config):
         )
         
         # Initialize CustomTrainState
-        train_state = CustomTrainState(
+        train_state = CustomTrainState.create(
+            apply_fn=agent.apply,
             params=online_params,
             target_params=target_params,
             tx=tx,
@@ -1020,17 +938,18 @@ def make_train(config):
             can_sample=jax.jit(buffer.can_sample),
         )
 
-        dummy_timestep = TimeStep(
-            observation=jnp.zeros((env.observation_space(env_params).shape[0],)),
-            reward=jnp.zeros((1,)),
-            done=jnp.zeros((1,)),
-            state=None,
-        )
-        dummy_agent_state = jnp.zeros((config["RNN_HIDDEN_DIM"],))
+        # dummy_timestep = TimeStep(
+        #     observation=jnp.zeros((env.observation_space(env_params).shape[0],)),
+        #     reward=jnp.array(0),
+        #     discount=jnp.array(0),
+        #     step_type=StepType.FIRST,
+        #     state=None,
+        # )
+        dummy_timestep = jax.tree_map(lambda x: jnp.zeros_like(x[0]), init_timestep)
         dummy_transition = Transition(
             timestep=dummy_timestep,
             action=jnp.array(0),
-            agent_state=dummy_agent_state
+            agent_state=jnp.zeros((config["RNN_HIDDEN_DIM"],))
         )
         buffer_state = buffer.init(dummy_transition)
         
@@ -1112,7 +1031,7 @@ def make_train(config):
 
             # --- 2. Add to Buffer ---
             # Transpose traj_batch if needed ([T, B] -> [B, T])
-            traj_batch = jax.tree.map(lambda x: jnp.transpose(x, (1, 0)), traj_batch)
+            traj_batch = jax.tree.map(lambda x: x.swapaxes(0, 1), traj_batch)
 
             # Add traj_batch to buffer: buffer_state = buffer.add(buffer_state, traj_batch)
             buffer_state = buffer.add(buffer_state, traj_batch)
@@ -1126,12 +1045,12 @@ def make_train(config):
                 rng, sample_rng, loss_rng = jax.random.split(rng, 3)
                 
                 # Sample batch of sequences from buffer -> sampled_batch
-                sampled_batch = buffer.sample(buffer_state, sample_rng)
+                sampled_batch = buffer.sample(buffer_state, sample_rng).experience
 
                 # Get initial RNN states (online/target) from sampled_batch.experience.agent_state
                 init_state = jax.tree.map(
                     lambda x: x[:, 0],  # Take first element along time dimension
-                    sampled_batch.experience.agent_state
+                    sampled_batch.agent_state
                 )
 
                 # Call jax.value_and_grad(loss_fn.calculate_loss, has_aux=True)(...)
@@ -1144,6 +1063,12 @@ def make_train(config):
                     init_state,
                     loss_rng
                 )
+
+                print("TD Error:", td_error.shape)
+                print("Loss:", loss.shape)
+                print("Metrics:", jax.tree.map(lambda x: x.shape, metrics))
+                print("Log info:", jax.tree.map(lambda x: x.shape, log_info))
+                print("Grads:", jax.tree.map(lambda x: x.shape, grads))
 
                 # Apply gradients: train_state = train_state.apply_gradients(grads=grads)
                 train_state = train_state.apply_gradients(grads=grads)
@@ -1226,7 +1151,7 @@ def make_train(config):
         runner_state = (
             train_state,
             init_timestep,
-            init_agent_state,
+            init_carry,
             buffer_state,
             rng
         )
@@ -1264,8 +1189,8 @@ if __name__ == "__main__":
         # --- Optimizer Settings ---
         "LR": 3e-4,
         "LR_LINEAR_DECAY": False,  # Whether to use linear LR decay
-        "EPS_ADAM": 1e-5,          # Adam optimizer epsilon (ACME default 1e-5)
-        "MAX_GRAD_NORM": 80,       # Gradient clipping norm (ACME default 40.0)
+        "EPS_ADAM": 1e-5,          # Adam optimizer epsilon
+        "MAX_GRAD_NORM": 80,       # Gradient clipping norm
         "TAU": 1.0,
 
         # --- Buffer Settings ---
