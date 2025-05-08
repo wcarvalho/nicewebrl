@@ -312,9 +312,9 @@ def simulate_n_trajectories(
         ###########################
         rng, rng_ = jax.random.split(rng)
 
-        print("timestep:", jax.tree_map(lambda x: x.shape, timestep))
-        print("agent_state:", agent_state.shape)
-        print("action:", a.shape)
+        # print("timestep:", jax.tree_map(lambda x: x.shape, timestep))
+        # print("agent_state:", agent_state.shape)
+        # print("action:", a.shape)
 
         # apply world model to get next timestep
         next_timestep = agent.apply_world_model(timestep, a, rng_)
@@ -365,6 +365,7 @@ def simulate_n_trajectories(
 class Logger:
     def metrics_logger(self, train_state, metrics):
         """Log scalar metrics (e.g., q_loss, td_error, reward)."""
+        key = "metrics"
         def callback(ts, m):
             m.update(
                 {
@@ -377,6 +378,7 @@ class Logger:
         jax.debug.callback(callback, train_state, metrics)
     
     def gradient_logger(self, train_state, grads):
+        key = "gradients"
         gradient_metrics = {
             f"{key}/{k}_norm": optax.global_norm(v) for k, v in grads.items()
         }
@@ -524,7 +526,7 @@ class DynaAgent(nn.Module):
         vmap_step = lambda num_envs: lambda rng, timestep, action: jax.vmap(
             self.env.step, in_axes=(0, 0, 0, None)
         )(jax.random.split(rng, num_envs), timestep, action, self.env_params)
-        print(action.shape)
+
         next_timestep = vmap_step(action.shape[0])(rng, ts, action)
         return next_timestep
 
@@ -569,14 +571,14 @@ class DynaLossFn:
         non_terminal = non_terminal[1:]       # Non-terminal mask [T, B]
         lambda_ = lambda_[1:]                 # Lambda trimmed [T, B]
         
-        print("q_tm1:", q_tm1.shape)
-        print("a_tm1:", a_tm1.shape)
-        print("q_t_target:", q_t_target.shape)
-        print("selector_actions:", selector_actions.shape)
-        print("r_t:", r_t.shape)
-        print("discount_t:", discount_t.shape)
-        print("is_last:", is_last.shape)
-        print("lambda_:", lambda_.shape)
+        # print("q_tm1:", q_tm1.shape)
+        # print("a_tm1:", a_tm1.shape)
+        # print("q_t_target:", q_t_target.shape)
+        # print("selector_actions:", selector_actions.shape)
+        # print("r_t:", r_t.shape)
+        # print("discount_t:", discount_t.shape)
+        # print("is_last:", is_last.shape)
+        # print("lambda_:", lambda_.shape)
 
         # 3. Calculate TD Error
         # We map over the batch dimension (axis 1)
@@ -645,9 +647,6 @@ class DynaLossFn:
         # Swap time and batch dimensions
         batch = jax.tree.map(lambda x: x.swapaxes(0, 1), batch) # [T, B, ...]
 
-        print("BATCH:")
-        print(jax.tree_map(lambda x: x.shape, batch))
-
         # Unpack batch data
         actions = batch.action # [T, B]
         timestep = batch.timestep # [T, B, ...]
@@ -680,10 +679,10 @@ class DynaLossFn:
             loss_mask=loss_mask,
         )
 
-        print("TD ERROR:", td_error.shape)
-        print("BATCH LOSS:", batch_loss.shape)
-        print("METRICS:", jax.tree_map(lambda x: x.shape, metrics))
-        print("LOG INFO:", jax.tree_map(lambda x: x.shape, log_info))
+        # print("TD ERROR:", td_error.shape)
+        # print("BATCH LOSS:", batch_loss.shape)
+        # print("METRICS:", jax.tree_map(lambda x: x.shape, metrics))
+        # print("LOG INFO:", jax.tree_map(lambda x: x.shape, log_info))
 
         # update L_online
         L_online = jnp.mean(batch_loss)
@@ -794,13 +793,6 @@ class DynaLossFn:
                 h_tar (jax.Array): [window_size, ...]
                 key (jax.random.PRNGKey): [2]
             """
-            # Add time dim
-            print("T:", jax.tree_map(lambda x: x.shape, t))
-            print("a:", a.shape)
-            print("h_on:", jax.tree_map(lambda x: x.shape, h_on))
-            print("h_tar:", jax.tree_map(lambda x: x.shape, h_tar))
-            print("l_mask:", jax.tree_map(lambda x: x.shape, l_mask))
-
             # get simulations starting from final timestep in window
             key, key_ = jax.random.split(key)
             # [sim_length, num_sim, ...]
@@ -809,9 +801,6 @@ class DynaLossFn:
                 x_t=t,
                 rng=key_,
             )
-            
-            print("NEXT T:", jax.tree_map(lambda x: x.shape, next_t))
-            print("SIMULATED OUTPUTS:", jax.tree_map(lambda x: x.shape, sim_outputs_t))
 
             # we replace last, because last action from data
             # is different than action from simulation
@@ -850,10 +839,10 @@ class DynaLossFn:
                 loss_mask=all_t_mask,
             )
 
-            print("BATCH TD ERROR:", batch_td_error.shape)
-            print("BATCH LOSS MEAN:", batch_loss_mean.shape)
-            print("METRICS:", jax.tree_map(lambda x: x.shape, metrics))
-            print("LOG INFO:", jax.tree_map(lambda x: x.shape, log_info))
+            # print("BATCH TD ERROR:", batch_td_error.shape)
+            # print("BATCH LOSS MEAN:", batch_loss_mean.shape)
+            # print("METRICS:", jax.tree_map(lambda x: x.shape, metrics))
+            # print("LOG INFO:", jax.tree_map(lambda x: x.shape, log_info))
 
             return batch_td_error, batch_loss_mean, metrics, log_info
         
@@ -874,7 +863,6 @@ class DynaLossFn:
 
 
 # --- Training Loop Structure (Conceptual) ---
-
 def make_train(config):
     # Create env and env_params
     env = make_craftax_env_from_name(config["ENV_NAME"], auto_reset=False)
@@ -1019,6 +1007,53 @@ def make_train(config):
             config=config,
             simulation_policy=simulation_policy.choose_actions
         )
+        
+        # Define learning step
+        def learn_step(train_state, buffer_state, rng):
+            # Split RNG for sampling and loss calculation
+            rng, sample_rng, loss_rng = jax.random.split(rng, 3)
+            
+            # Sample batch of sequences from buffer -> sampled_batch
+            sampled_batch = buffer.sample(buffer_state, sample_rng).experience
+
+            # Get initial RNN states (online/target) from sampled_batch.experience.agent_state
+            init_state = jax.tree.map(
+                lambda x: x[:, 0],  # Take first element along time dimension
+                sampled_batch.agent_state
+            )
+
+            # Call jax.value_and_grad(loss_fn.calculate_loss, has_aux=True)(...)
+            #       - Pass online_params, target_params, model_params, learn_batch, initial_states, rng
+            #       - Returns: (td_error, loss, metrics, log_info), grads
+            (loss, (td_error, metrics, log_info)), grads = jax.value_and_grad(loss_fn.total_loss, has_aux=True)(
+                train_state.params,
+                train_state.target_params,
+                sampled_batch,
+                init_state,
+                loss_rng
+            )
+
+            # print("TD Error:", td_error.shape)
+            # print("Loss:", loss.shape)
+            # print("Metrics:", jax.tree.map(lambda x: x.shape, metrics))
+            # print("Log info:", jax.tree.map(lambda x: x.shape, log_info))
+            # print("Grads:", jax.tree.map(lambda x: x.shape, grads))
+
+            # Apply gradients: train_state = train_state.apply_gradients(grads=grads)
+            train_state = train_state.apply_gradients(grads=grads)
+
+            # TODO: Update priorities in buffer: buffer_state = buffer.set_priorities(buffer_state, indices, aux_data["priorities"])
+            # Increment update counter in train_state
+            train_state = train_state.replace(n_updates=train_state.n_updates + 1)
+
+            return train_state, buffer_state, metrics, log_info, grads, rng
+        
+        # get dummy values for metrics, log_info, grads
+        _, _, dummy_metrics, dummy_log_info, dummy_grads, _ = learn_step(
+            train_state,
+            buffer_state,
+            rng
+        )
 
         def _train_step(runner_state, unused):
             train_state, env_timestep, agent_state, buffer_state, rng = runner_state
@@ -1044,55 +1079,17 @@ def make_train(config):
             # Update total timesteps counter in train_state
             train_state = train_state.replace(timesteps=train_state.timesteps + config["TRAINING_INTERVAL"])
 
-            # --- 3. Learning Update ---
-            def _learn_step(train_state, buffer_state, rng):
-                # Split RNG for sampling and loss calculation
-                rng, sample_rng, loss_rng = jax.random.split(rng, 3)
-                
-                # Sample batch of sequences from buffer -> sampled_batch
-                sampled_batch = buffer.sample(buffer_state, sample_rng).experience
-
-                # Get initial RNN states (online/target) from sampled_batch.experience.agent_state
-                init_state = jax.tree.map(
-                    lambda x: x[:, 0],  # Take first element along time dimension
-                    sampled_batch.agent_state
-                )
-
-                # Call jax.value_and_grad(loss_fn.calculate_loss, has_aux=True)(...)
-                #       - Pass online_params, target_params, model_params, learn_batch, initial_states, rng
-                #       - Returns: (td_error, loss, metrics, log_info), grads
-                (loss, (td_error, metrics, log_info)), grads = jax.value_and_grad(loss_fn.total_loss, has_aux=True)(
-                    train_state.params,
-                    train_state.target_params,
-                    sampled_batch,
-                    init_state,
-                    loss_rng
-                )
-
-                print("TD Error:", td_error.shape)
-                print("Loss:", loss.shape)
-                print("Metrics:", jax.tree.map(lambda x: x.shape, metrics))
-                print("Log info:", jax.tree.map(lambda x: x.shape, log_info))
-                print("Grads:", jax.tree.map(lambda x: x.shape, grads))
-
-                # Apply gradients: train_state = train_state.apply_gradients(grads=grads)
-                train_state = train_state.apply_gradients(grads=grads)
-
-                # TODO: Update priorities in buffer: buffer_state = buffer.set_priorities(buffer_state, indices, aux_data["priorities"])
-                # Increment update counter in train_state
-                train_state = train_state.replace(n_updates=train_state.n_updates + 1)
-
-                return train_state, buffer_state, metrics, log_info, grads, rng
-
             ##############################
             # 1. Learner update
             ##############################
             # TODO: match up shapes for true and false
+            # NOTE: move _learn_step outside of make_train and call it with dummy inputs to get values for False
+            # NOTE: Reference vbb
             is_learn_time = (train_state.timesteps > config["LEARNING_STARTS"]) & buffer.can_sample(buffer_state)
             train_state, buffer_state, metrics, log_info, grads, rng = jax.lax.cond(
                 is_learn_time,
-                lambda ts, bs, r: _learn_step(ts, bs, r),
-                lambda ts, bs, r: (ts, bs, r, None, None, r),
+                lambda ts, bs, r: learn_step(ts, bs, r),
+                lambda ts, bs, r: (ts, bs, dummy_metrics, dummy_log_info, dummy_grads, r),
                 train_state,
                 buffer_state,
                 rng
@@ -1234,7 +1231,7 @@ if __name__ == "__main__":
         "NUM_SEEDS": 1,
         "ENTITY": "hoonshin",
         "PROJECT": "dyna-crafter",
-        "WANDB_MODE": "disabled",
+        "WANDB_MODE": "online",
     }
 
     # Initialize wandb
