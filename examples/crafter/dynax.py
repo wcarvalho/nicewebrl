@@ -2,6 +2,7 @@ import jax
 import jax.numpy as jnp
 import flax
 import flax.linen as nn
+from flax.linen.module import nowrap
 import flax.struct as struct
 from flax.training.train_state import TrainState
 import optax
@@ -52,7 +53,7 @@ class Transition:
 
 @struct.dataclass
 class CustomTrainState(TrainState):
-    target_network_params: flax.core.FrozenDict
+    target_params: flax.core.FrozenDict
     timesteps: int
     n_updates: int
 
@@ -451,6 +452,92 @@ class MLP(nn.Module):
 
 # Agent
 # Based on ScannedRNN from PureJaxRL
+# class DynaAgent(nn.Module):
+#     config: dict
+#     env: TimestepWrapper
+#     env_params: Any
+
+#     def setup(self):
+#         self.encoder_hidden_dim = self.config["ENCODER_HIDDEN_DIM"]
+#         self.num_encoder_layers = self.config["NUM_ENCODER_LAYERS"]
+#         self.q_hidden_dim = self.config["Q_HIDDEN_DIM"]
+#         self.num_q_layers = self.config["NUM_Q_LAYERS"]
+#         self.rnn_hidden_dim = self.config["RNN_HIDDEN_DIM"]
+#         self.num_rnn_layers = self.config["NUM_RNN_LAYERS"]
+#         self.num_envs = self.config["NUM_ENVS"]
+#         self.use_bias = self.config["USE_BIAS"]
+#         self.num_actions = self.env.action_space(self.env_params).n
+
+#         self.encoder = MLP(
+#             hidden_dim=self.encoder_hidden_dim,
+#             num_layers=self.num_encoder_layers,
+#             use_bias=self.use_bias,
+#             name="encoder_mlp",
+#         )
+#         self.q_head = MLP(
+#             hidden_dim=self.q_hidden_dim,
+#             out_dim=self.num_actions,
+#             num_layers=self.num_q_layers,
+#             use_bias=self.use_bias,
+#             name="q_head_mlp",
+#         )
+#         self.rnn = nn.GRUCell(
+#             features=self.rnn_hidden_dim,
+#             name="gru_cell"
+#         )
+    
+#     # @staticmethod
+#     # def initialize_carry(rnn_cell: nn.GRUCell, batch_size: int, hidden_size: int):
+#     #     """Initializes the carry state for the given RNN cell."""
+#     #     return rnn_cell.initialize_carry(
+#     #         rng=jax.random.PRNGKey(0), # Dummy key for zero initialization
+#     #         input_shape=(batch_size, hidden_size),
+#     #     )
+
+#     @functools.partial(
+#         nn.scan,
+#         variable_broadcast="params",
+#         in_axes=0,
+#         out_axes=0,
+#         split_rngs={"params": False},
+#     )
+#     def __call__(self, carry, x):
+#         """Applies the module."""
+#         hidden_size = self.rnn_hidden_dim
+#         rnn_state = carry
+#         ins, resets = x
+#         rnn_state = jnp.where(
+#             resets[:, np.newaxis],
+#             self.initialize_carry(hidden_size, (self.num_envs, self.encoder_hidden_dim)),
+#             rnn_state,
+#         )
+#         embeds = self.encoder(ins)
+#         next_rnn_state, y = self.rnn(rnn_state, embeds)
+#         q_vals = self.q_head(y)
+#         preds = Predictions(q_vals=q_vals, state=next_rnn_state)
+#         return next_rnn_state, preds
+
+#     @staticmethod
+#     def initialize_carry(rnn_cell, input_shape):
+#         # Use a dummy key since the default state init fn is just zeros.
+#         return rnn_cell.initialize_carry(
+#             rng=jax.random.PRNGKey(0),
+#             input_shape=input_shape,
+#         )
+
+#     def apply_world_model(self, timestep: struct.PyTreeNode, action: jax.Array, rng: jax.Array) -> struct.PyTreeNode:
+#         """
+#         Simulates one step using the 'world model' (ground truth env).
+#         """
+#         # vmap the step function
+#         vmap_step = lambda num_envs: lambda rng, timestep, action: jax.vmap(
+#             self.env.step, in_axes=(0, 0, 0, None)
+#         )(jax.random.split(rng, num_envs), timestep, action, self.env_params)
+        
+#         # Implement ground truth env.step call
+#         next_timestep = vmap_step(self.config["NUM_ENVS"])(rng, timestep, action)
+#         return next_timestep
+
 class DynaAgent(nn.Module):
     config: dict
     env: TimestepWrapper
@@ -461,13 +548,23 @@ class DynaAgent(nn.Module):
             hidden_dim=self.config["ENCODER_HIDDEN_DIM"],
             num_layers=self.config["NUM_ENCODER_LAYERS"],
             use_bias=self.config["USE_BIAS"],
+            name="encoder_mlp",
         )
         self.q_head = MLP(
             hidden_dim=self.config["Q_HIDDEN_DIM"],
             out_dim=self.env.action_space(self.env_params).n,
             num_layers=self.config["NUM_Q_LAYERS"],
             use_bias=self.config["USE_BIAS"],
+            name="q_head_mlp",
         )
+        self.rnn = nn.GRUCell(
+            features=self.config["RNN_HIDDEN_DIM"],
+            name="gru_cell"
+        )
+
+        # Cache config values for use during scan (avoid dict access in traced code)
+        self.hidden_size = self.config["RNN_HIDDEN_DIM"]
+        self.num_envs = self.config["NUM_ENVS"]
 
     @functools.partial(
         nn.scan,
@@ -477,40 +574,44 @@ class DynaAgent(nn.Module):
         split_rngs={"params": False},
     )
     def __call__(self, carry, x):
-        """Applies the module."""
-        hidden_size = self.config["RNN_HIDDEN_DIM"]
+        """
+        carry: GRU hidden state [batch, hidden_size]
+        x: tuple of (obs, reset flags)
+           obs: [T, B, obs_dim...], resets: [T, B]
+        """
         rnn_state = carry
-        ins, resets = x
+        obs, resets = x  # each [batch, ...]
+
+        # Reinitialize RNN state for environments that have reset
         rnn_state = jnp.where(
-            resets[:, np.newaxis],
-            self.initialize_carry(ins.shape[0], hidden_size),
-            rnn_state,
+            resets[:, None],  # [batch, 1]
+            self.initialize_carry(resets.shape[0], self.hidden_size),  # [batch, hidden]
+            rnn_state
         )
-        embeds = self.encoder(ins)
-        next_rnn_state, y = nn.GRUCell()(rnn_state, embeds)
-        q_vals = self.q_head(y)
+
+        embeds = self.encoder(obs)  # [batch, embedding_dim]
+        next_rnn_state, rnn_out = self.rnn(rnn_state, embeds)  # both [batch, hidden]
+        q_vals = self.q_head(rnn_out)  # [batch, num_actions]
+
         preds = Predictions(q_vals=q_vals, state=next_rnn_state)
         return next_rnn_state, preds
-
+    
     @staticmethod
     def initialize_carry(batch_size, hidden_size):
-        # Use a dummy key since the default state init fn is just zeros.
-        return nn.GRUCell.initialize_carry(
-            jax.random.PRNGKey(0), (batch_size,), hidden_size
-        )
-    
+        return jnp.zeros((batch_size, hidden_size))
+
     def apply_world_model(self, timestep: struct.PyTreeNode, action: jax.Array, rng: jax.Array) -> struct.PyTreeNode:
         """
         Simulates one step using the 'world model' (ground truth env).
+        This wraps the true `env.step` function.
         """
-        # vmap the step function
-        vmap_step = lambda num_envs: lambda rng, timestep, action: jax.vmap(
-            self.env.step, in_axes=(0, 0, 0, None)
-        )(jax.random.split(rng, num_envs), timestep, action, self.env_params)
-        
-        # Implement ground truth env.step call
-        next_timestep = vmap_step(self.config["NUM_ENVS"])(rng, timestep, action)
+        def step_fn(rng, ts, act):
+            return self.env.step(rng, ts, act, self.env_params)
+
+        rngs = jax.random.split(rng, self.num_envs)
+        next_timestep = jax.vmap(step_fn)(rngs, timestep, action)
         return next_timestep
+
 
 # --- Loss Function ---
 
@@ -883,9 +984,9 @@ def make_train(config):
             ),
             jnp.zeros((1, config["NUM_ENVS"])),
         )
-        init_agent_state = DynaAgent.initialize_carry(config["NUM_ENVS"], config["RNN_HIDDEN_DIM"])
-        online_params = agent.init(init_rng, init_agent_state, init_x)
-        target_params = online_params
+        init_carry = DynaAgent.initialize_carry(config["NUM_ENVS"], config["RNN_HIDDEN_DIM"])
+        online_params = agent.init(init_rng, init_carry, init_x)
+        target_params = jax.tree_map(lambda x: jnp.copy(x), online_params)
         
         # Initialize Optimizer
         lr = config["LR"]
@@ -897,7 +998,7 @@ def make_train(config):
         # Initialize CustomTrainState
         train_state = CustomTrainState(
             params=online_params,
-            target_network_params=target_params,
+            target_params=target_params,
             tx=tx,
             timesteps=0,
             n_updates=0,
@@ -1038,7 +1139,7 @@ def make_train(config):
                 #       - Returns: (td_error, loss, metrics, log_info), grads
                 (td_error, loss, metrics, log_info), grads = jax.value_and_grad(loss_fn.total_loss, has_aux=True)(
                     train_state.params,
-                    train_state.target_network_params,
+                    train_state.target_params,
                     sampled_batch,
                     init_state,
                     loss_rng
@@ -1070,9 +1171,9 @@ def make_train(config):
             train_state = jax.lax.cond(
                 train_state.n_updates % config["TARGET_UPDATE_INTERVAL"] == 0,
                 lambda train_state: train_state.replace(
-                    target_network_params=optax.incremental_update(
+                    target_params=optax.incremental_update(
                         train_state.params,
-                        train_state.target_network_params,
+                        train_state.target_params,
                         config["TAU"],
                     )
                 ),
@@ -1153,11 +1254,11 @@ if __name__ == "__main__":
         "TARGET_UPDATE_INTERVAL": 1_000, # How many LEARNER UPDATES between target network syncs (R2D2 uses ~2500 steps)
 
         # --- Network Settings ---
-        "RNN_HIDDEN_DIM": 256,     # Size of RNN hidden state (Dyna code used 256)
-        "ENCODER_HIDDEN_DIM": 512, # Hidden dim for observation encoder MLP
+        "RNN_HIDDEN_DIM": 256,     # Size of RNN hidden state
+        "ENCODER_HIDDEN_DIM": 256, # Hidden dim for observation encoder MLP
         "NUM_ENCODER_LAYERS": 0,   # Hidden layers for observation encoder MLP
-        "Q_HIDDEN_DIM": 512,       # Hidden dim for Q-head MLP (Dyna code used 512)
-        "NUM_Q_LAYERS": 2,         # Hidden layers for Q-head MLP (Dyna code used 1)
+        "Q_HIDDEN_DIM": 1024,      # Hidden dim for Q-head MLP
+        "NUM_Q_LAYERS": 2,         # Hidden layers for Q-head MLP
         "USE_BIAS": True,          # Whether to use bias in Dense layers
 
         # --- Optimizer Settings ---
@@ -1202,7 +1303,7 @@ if __name__ == "__main__":
         "NUM_SEEDS": 1,
         "ENTITY": "hoonshin",
         "PROJECT": "dyna-crafter",
-        "WANDB_MODE": "online",
+        "WANDB_MODE": "disabled",
     }
 
     # Initialize wandb
@@ -1217,7 +1318,6 @@ if __name__ == "__main__":
 
     # Call make_train(config, env, env_params)
     rng = jax.random.PRNGKey(config["SEED"])
-    rngs = jax.random.split(rng, config["NUM_SEEDS"])
 
-    train_vjit = jax.jit(jax.vmap(make_train(config)))
-    outs = jax.block_until_ready(train_vjit(rngs))
+    train_jit = jax.jit(make_train(config))
+    outs = jax.block_until_ready(train_jit(rng))
