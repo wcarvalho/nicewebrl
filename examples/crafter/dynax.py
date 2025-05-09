@@ -1077,7 +1077,7 @@ def make_train(config):
             buffer_state = buffer.add(buffer_state, traj_batch)
 
             # Update total timesteps counter in train_state
-            train_state = train_state.replace(timesteps=train_state.timesteps + config["TRAINING_INTERVAL"])
+            train_state = train_state.replace(timesteps=train_state.timesteps + config["TRAINING_INTERVAL"] * config["NUM_ENVS"])
 
             ##############################
             # 1. Learner update
