@@ -285,7 +285,7 @@ def simulate_n_trajectories(
         h_t, preds = agent.apply(params, h_tm1, inputs)
         
         # remove time dim
-        preds = jax.tree_map(lambda p: p.squeeze(0), preds)
+        preds = jax.tree.map(lambda p: p.squeeze(0), preds)
 
         return x, h_t, preds
 
@@ -296,8 +296,8 @@ def simulate_n_trajectories(
     # one for each simulation
     # [N, ...]
     # replace (x_t, task) with N-copies
-    x_t = jax.tree_map(lambda x: jnp.repeat(x[None], num_simulations, axis=0), x_t)
-    h_tm1 = jax.tree_map(lambda x: jnp.repeat(x[None], num_simulations, axis=0), h_tm1)
+    x_t = jax.tree.map(lambda x: jnp.repeat(x[None], num_simulations, axis=0), x_t)
+    h_tm1 = jax.tree.map(lambda x: jnp.repeat(x[None], num_simulations, axis=0), h_tm1)
 
     x_t, h_t, preds_t = initial_predictions(x_t, h_tm1)
 
@@ -312,7 +312,7 @@ def simulate_n_trajectories(
         ###########################
         rng, rng_ = jax.random.split(rng)
 
-        # print("timestep:", jax.tree_map(lambda x: x.shape, timestep))
+        # print("timestep:", jax.tree.map(lambda x: x.shape, timestep))
         # print("agent_state:", agent_state.shape)
         # print("action:", a.shape)
 
@@ -681,8 +681,8 @@ class DynaLossFn:
 
         # print("TD ERROR:", td_error.shape)
         # print("BATCH LOSS:", batch_loss.shape)
-        # print("METRICS:", jax.tree_map(lambda x: x.shape, metrics))
-        # print("LOG INFO:", jax.tree_map(lambda x: x.shape, log_info))
+        # print("METRICS:", jax.tree.map(lambda x: x.shape, metrics))
+        # print("LOG INFO:", jax.tree.map(lambda x: x.shape, log_info))
 
         # update L_online
         L_online = jnp.mean(batch_loss)
@@ -805,7 +805,7 @@ class DynaLossFn:
             # we replace last, because last action from data
             # is different than action from simulation
             # [window_size + sim_length, num_sims, ...]
-            # all_but_last = lambda y: jax.tree_map(lambda x: x[:-1], y)
+            # all_but_last = lambda y: jax.tree.map(lambda x: x[:-1], y)
             # all_t = concat_start_sims(all_but_last(t), next_t)
             # all_a = concat_start_sims(all_but_last(a), sim_outputs_t.actions)
             all_t = next_t
@@ -815,9 +815,9 @@ class DynaLossFn:
             resets = 1.0 - all_t.discount
             xs = (all_t.observation, resets)
 
-            # h_on_init = jax.tree_map(lambda x: x[0], h_on)
+            # h_on_init = jax.tree.map(lambda x: x[0], h_on)
             # h_on_init = repeat(h_on_init, self.config["NUM_SIMULATIONS"])
-            # h_tar_init = jax.tree_map(lambda x: x[0], h_tar)
+            # h_tar_init = jax.tree.map(lambda x: x[0], h_tar)
             # h_tar_init = repeat(h_tar_init, self.config["NUM_SIMULATIONS"])
 
             h_on_init = repeat(h_on, self.config["NUM_SIMULATIONS"])
@@ -841,8 +841,8 @@ class DynaLossFn:
 
             # print("BATCH TD ERROR:", batch_td_error.shape)
             # print("BATCH LOSS MEAN:", batch_loss_mean.shape)
-            # print("METRICS:", jax.tree_map(lambda x: x.shape, metrics))
-            # print("LOG INFO:", jax.tree_map(lambda x: x.shape, log_info))
+            # print("METRICS:", jax.tree.map(lambda x: x.shape, metrics))
+            # print("LOG INFO:", jax.tree.map(lambda x: x.shape, log_info))
 
             return batch_td_error, batch_loss_mean, metrics, log_info
         
@@ -903,7 +903,7 @@ def make_train(config):
         )
         init_carry = DynaAgent.initialize_carry(config["NUM_ENVS"], config["RNN_HIDDEN_DIM"])
         online_params = agent.init(init_rng, init_carry, init_x)
-        target_params = jax.tree_map(lambda x: jnp.copy(x), online_params)
+        target_params = jax.tree.map(lambda x: jnp.copy(x), online_params)
         
         # Initialize Optimizer
         lr = config["LR"]
@@ -938,7 +938,7 @@ def make_train(config):
             can_sample=jax.jit(buffer.can_sample),
         )
 
-        dummy_timestep = jax.tree_map(lambda x: jnp.zeros_like(x[0]), init_timestep)
+        dummy_timestep = jax.tree.map(lambda x: jnp.zeros_like(x[0]), init_timestep)
         dummy_transition = Transition(
             timestep=dummy_timestep,
             action=jnp.array(0),
@@ -1176,7 +1176,7 @@ if __name__ == "__main__":
         "NUM_ENVS": 32,  # Number of parallel environments (PureJaxRL DQN used 10, can increase)
 
         # --- Training Loop Settings ---
-        "TOTAL_TIMESTEPS": 1_000_000,    # Total environment steps
+        "TOTAL_TIMESTEPS": 5_000_000,    # Total environment steps
         "TRAINING_INTERVAL": 5,          # How many env steps per actor sequence collection
         "LEARNING_STARTS": 10_000,       # Timesteps before learning begins
         "TARGET_UPDATE_INTERVAL": 1_000, # How many LEARNER UPDATES between target network syncs (R2D2 uses ~2500 steps)
