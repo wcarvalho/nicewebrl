@@ -1,0 +1,13 @@
+nicegui>=1.4.0
+fastapi>=0.68.0
+tortoise-orm>=0.19.0
+jax>=0.4.16
+jaxlib>=0.4.16
+httpx>=0.24.0
+uvicorn>=0.15.0
+xminigrid>=0.1.0
+Pillow
+distrax>=0.1.5
+flax>=0.8.2
+numpy>=1.26.4,<2
+polars

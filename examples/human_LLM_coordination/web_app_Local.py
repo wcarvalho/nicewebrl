@@ -14,10 +14,6 @@ from nicewebrl import stages
 
 import experiment_structure as experiment
 
-
-
-import ipdb
-
 DATA_DIR = "data"
 DATABASE_FILE = "db.sqlite"
 
@@ -153,9 +149,6 @@ async def check_if_over(container, episode_limit=60):
   if minutes_passed > episode_limit:
     pass
 
-
-
-
 @ui.page("/")
 async def index(request: Request):
   user_info = dict(
@@ -169,15 +162,6 @@ async def index(request: Request):
 
   def print_ping(e):
     logger.info(str(e.args))
-
-  def convert_state_to_text(state):
-    state_text = f"""The agent is at position ({state.agent.position[0]}, {state.agent.position[1]}) facing {state.agent.direction}.
-      The goal is located at position ({state.goal.position[0]}, {state.goal.position[1]}).
-      The grid is {state.grid.height}x{state.grid.width} in size.
-      There are {len(state.grid.walls)} walls at positions: {[(pos[0], pos[1]) for pos in state.grid.walls]}.
-      The current step count is {state.step_count}.
-      The episode is {'over' if state.is_terminal() else 'ongoing'}."""
-    return state_text
 
   ui.on("ping", print_ping)
   ui.on("key_pressed", lambda e: global_handle_key_press(e, gameplay_container))
@@ -196,113 +180,90 @@ async def index(request: Request):
       )
       asyncio.create_task(start_experiment(gameplay_container))
 
-  
-
     with ui.column().style("flex: 1; padding: 16px; background-color: #f5f5f5;"):
-      ui.markdown("## 💬 Chat with Gemini")
+      ui.markdown("## 💬 Chat with Local Model")
+      
+      # Model selection dropdown
+      model_dropdown = ui.select(
+        options=[
+          "gpt2",
+          "facebook/opt-125m",
+          "microsoft/DialoGPT-small"
+        ],
+        value="gpt2",
+        label="Select Model"
+      ).style("width: 100%; margin-bottom: 10px;")
+      
+      # Load model button
+      load_button = ui.button("Load Model")
+      model_status = ui.markdown("Model not loaded").style("margin-bottom: 10px;")
+      
       chat_input = ui.input(placeholder="Ask for hints or clues...").style("width: 100%; margin-bottom: 10px;")
       send_button = ui.button("Send")
       response_box = ui.markdown("Waiting for your question...").style("margin-top: 10px;")
 
-      
-      async def send_message():
-        message = chat_input.value
+      # Store the loaded model
+      loaded_model = None
+      loaded_tokenizer = None
+
+      async def load_model():
+        nonlocal loaded_model, loaded_tokenizer
         try:
-          api_key = "AIzaSyBBQov9d6m94x8QIVH3oJjHcoKjfP6VNUE"
-          url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
-          headers = {
-            "Content-Type": "application/json",
-          }
-          
-          current_stage = experiment.all_stages[app.storage.user["stage_idx"]]
-
-          current_stage = experiment.all_stages[1]
-
-          # Get the environment state from the stage
-          env_text = ""
-          if isinstance(current_stage, stages.EnvStage):
-              timestep = current_stage.get_user_data("stage_state").timestep
-              
-              if timestep is not None:
-                  state = timestep.state
-
-                  ipdb.set_trace()
-
-                  
-                  if state is not None:
-                      env_text = convert_state_to_text(state)
-                      print("Converted state to text:", env_text)
-          
-          parts = [{
-            "text": (
-                "You are a helpful assistant for a Minigrid 8x8 Empty reinforcement learning game.\n"
-                "Current environment state:\n"
-                f"{env_text}\n"
-                "Use this information to understand the user's position and goal.\n"
-                "Give short, specific hints to help them progress.\n"
-                "Keep responses to 1-2 lines."
-            )
-          }]
-          
-          parts.append({"text": f"Question: {message}"})
-
-          data = {"contents": [{"parts": parts}]}
-
-          async with httpx.AsyncClient() as client:
-            res = await client.post(url, headers=headers, json=data)
-            res.raise_for_status()
-            output = res.json()["candidates"][0]["content"]["parts"][0]["text"]
-            response_box.set_content(f"**Hint:** {output}")
-            response_box.update()
+          from transformers import FlaxAutoModelForCausalLM, AutoTokenizer
+          model_name = model_dropdown.value
+          model_status.set_content(f"Loading {model_name}...")
+          loaded_model = FlaxAutoModelForCausalLM.from_pretrained(model_name)
+          loaded_tokenizer = AutoTokenizer.from_pretrained(model_name)
+          model_status.set_content(f"Model {model_name} loaded successfully!")
         except Exception as e:
-          response_box.set_content(f"**Error:** {str(e)}")
-          response_box.update()
-        chat_input.set_value("")
+          model_status.set_content(f"Error loading model: {str(e)}")
 
-      send_button.on_click(send_message)
-      '''
       async def send_message():
+        if not loaded_model or not loaded_tokenizer:
+          response_box.set_content("Please load a model first!")
+          return
+
         message = chat_input.value
-        game_state = "Minigrid state placeholder"
         try:
-          api_key = "AIzaSyBBQov9d6m94x8QIVH3oJjHcoKjfP6VNUE"
-          url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
-          headers = {
-            "Content-Type": "application/json",
-          }
-          parts = [{
-            "text": (
-                "You are a helpful assistant for a Minigrid 8x8 Empty reinforcement learning game.\n"
-                "The first image is the **previous state** of the environment.\n"
-                "The second image is the **current state**.\n"
-                "Use these to understand the user's position and goal.\n"
-                "Give short, specific hints to help them progress.\n"
-                "Keep responses to 1-2 lines."
-            )
-        }]
+          # Prepare the prompt with game context
+          prompt = (
+              "You are a helpful assistant for a Minigrid 8x8 Empty reinforcement learning game.\n"
+              "The first image is the previous state of the environment.\n"
+              "The second image is the current state.\n"
+              "Use these to understand the user's position and goal.\n"
+              "Give short, specific hints to help them progress.\n"
+              "Keep responses to 1-2 lines.\n"
+              f"Question: {message}\n"
+              "Answer:"
+          )
+
           if previous_obs_base64:
-            parts.append({"inline_data": {"mime_type": "image/png", "data": previous_obs_base64}})
+              prompt += f"\nPrevious state: {previous_obs_base64}\n"
           if current_obs_base64:
-            parts.append({"inline_data": {"mime_type": "image/png", "data": current_obs_base64}})
+              prompt += f"\nCurrent state: {current_obs_base64}\n"
 
-          parts.append({"text": f"Question: {message}"})
-
-          data = {"contents": [{"parts": parts}]}
-
-          async with httpx.AsyncClient() as client:
-            res = await client.post(url, headers=headers, json=data)
-            res.raise_for_status()
-            output = res.json()["candidates"][0]["content"]["parts"][0]["text"]
-            response_box.set_content(f"**Hint:** {output}")
-            response_box.update()
+          
+          # Tokenize and generate response using JAX
+          inputs = loaded_tokenizer(prompt, return_tensors="jax")
+          outputs = loaded_model.generate(
+              inputs["input_ids"],
+              max_length=100,
+              num_return_sequences=1,
+              pad_token_id=loaded_tokenizer.eos_token_id
+          )
+          
+          response = loaded_tokenizer.decode(outputs.sequences[0], skip_special_tokens=True)
+          # Extract just the answer part
+          answer = response.split("Answer:")[-1].strip()
+          response_box.set_content(f"**Hint:** {answer}")
+          response_box.update()
         except Exception as e:
           response_box.set_content(f"**Error:** {str(e)}")
           response_box.update()
         chat_input.set_value("")
 
+      load_button.on_click(load_model)
       send_button.on_click(send_message)
-      '''
-
 
 ui.run(
   storage_secret="private key to secure the browser session cookie",

@@ -475,7 +475,7 @@ class EnvStage(Stage):
     timestep_data = {}
     if self.custom_data_fn is not None:
       timestep_data = self.custom_data_fn(timestep)
-      timestep_data = jax.tree_map(make_serializable, timestep_data)
+      timestep_data = jax.tree.map(make_serializable, timestep_data)
 
     serialized_timestep = serialization.to_bytes(timestep)
 
@@ -623,12 +623,12 @@ class EnvStage(Stage):
       else:
         action_idx = self.key_to_action[key]
         next_timesteps = self.get_user_data("next_timesteps")
-        timestep = jax.tree_map(lambda t: t[action_idx], next_timesteps)
+        timestep = jax.tree.map(lambda t: t[action_idx], next_timesteps)
     else:
       # use action to select from avaialble next time-steps
       action_idx = self.key_to_action[key]
       next_timesteps = self.get_user_data("next_timesteps")
-      timestep = jax.tree_map(lambda t: t[action_idx], next_timesteps)
+      timestep = jax.tree.map(lambda t: t[action_idx], next_timesteps)
 
     #############################
     # update stage variables
