@@ -296,11 +296,7 @@ Examples:
 
       async def get_gemini_response(message, env_text):
           api_key = config.GEMINI_API_KEY
-<<<<<<< HEAD
-          url = config.GEMINI_API_URL
-=======
           url = f"{config.GEMINI_API_URL}?key={api_key}"
->>>>>>> 8fd8159 (cleaned all api keys)
           headers = {"Content-Type": "application/json"}
           
           parts = [{
