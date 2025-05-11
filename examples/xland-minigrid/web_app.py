@@ -471,5 +471,10 @@ ui.run(
   port=8080,
   # reload='FLY_ALLOC_ID' not in os.environ,
   reload=False,
+<<<<<<< HEAD:examples/crafter/web_app.py
   title="Crafter Web App",
 )
+=======
+  title="XLand-MiniGrid Web App",
+)
+>>>>>>> main:examples/xland-minigrid/web_app.py
