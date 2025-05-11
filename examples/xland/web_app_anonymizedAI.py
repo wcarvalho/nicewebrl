@@ -13,6 +13,7 @@ from nicewebrl.utils import wait_for_button_or_keypress
 from nicewebrl import stages
 
 import experiment_structure as experiment
+import config  # Import the config file
 
 import ipdb
 import pprint
@@ -268,8 +269,7 @@ Examples:
       response_box = ui.markdown("Waiting for your question...").style("margin-top: 10px;")
 
       async def get_gemini_response(message, env_text):
-          api_key = config.GEMINI_API_KEY
-          url = config.GEMINI_API_URL
+          url = f"{config.GEMINI_API_URL}?key={config.GEMINI_API_KEY}"
           headers = {"Content-Type": "application/json"}
           
           parts = [{
@@ -299,11 +299,10 @@ Examples:
               return res.json()["candidates"][0]["content"]["parts"][0]["text"]
 
       async def get_claude_response(message, env_text):
-          api_key = config.CLAUDE_API_KEY
           url = config.CLAUDE_API_URL
           headers = {
               "Content-Type": "application/json",
-              "x-api-key": api_key,
+              "x-api-key": config.CLAUDE_API_KEY,
               "anthropic-version": "2023-06-01"
           }
           
@@ -322,18 +321,18 @@ Examples:
               "Keep responses to 1-2 lines.\n\n"
           )
           user_prompt = (
-        f"Current environment state:\n{env_text}\n"
-        f"Question: {message}"
+              f"Current environment state:\n{env_text}\n"
+              f"Question: {message}"
           )
           
           data = {
-        "model": "claude-3-opus-20240229",
-        "max_tokens": 150,
-        "system": system_prompt,
-        "messages": [
-            {"role": "user", "content": user_prompt}
-        ]
-    }
+              "model": config.CLAUDE_MODEL,
+              "max_tokens": 150,
+              "system": system_prompt,
+              "messages": [
+                  {"role": "user", "content": user_prompt}
+              ]
+          }
 
           async with httpx.AsyncClient() as client:
               res = await client.post(url, headers=headers, json=data)
@@ -341,11 +340,10 @@ Examples:
               return res.json()["content"][0]["text"]
 
       async def get_chatgpt_response(message, env_text):
-          api_key = config.CHATGPT_API_KEY
           url = config.CHATGPT_API_URL
           headers = {
               "Content-Type": "application/json",
-              "Authorization": f"Bearer {api_key}"
+              "Authorization": f"Bearer {config.CHATGPT_API_KEY}"
           }
           
           prompt = (
@@ -366,7 +364,7 @@ Examples:
           )
           
           data = {
-              "model": "gpt-3.5-turbo",
+              "model": config.CHATGPT_MODEL,
               "messages": [
                   {"role": "system", "content": prompt},
                   {"role": "user", "content": message}
