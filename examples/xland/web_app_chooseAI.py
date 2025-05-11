@@ -12,6 +12,7 @@ from nicewebrl.logging import setup_logging, get_logger
 from nicewebrl.utils import wait_for_button_or_keypress
 from nicewebrl import stages
 
+import config
 import experiment_structure as experiment
 import config
 import ipdb
@@ -295,7 +296,11 @@ Examples:
 
       async def get_gemini_response(message, env_text):
           api_key = config.GEMINI_API_KEY
+<<<<<<< HEAD
           url = config.GEMINI_API_URL
+=======
+          url = f"{config.GEMINI_API_URL}?key={api_key}"
+>>>>>>> 8fd8159 (cleaned all api keys)
           headers = {"Content-Type": "application/json"}
           
           parts = [{
