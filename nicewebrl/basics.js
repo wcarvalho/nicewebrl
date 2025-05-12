@@ -59,6 +59,11 @@ document.addEventListener('DOMContentLoaded', async function () {
   // Prevent spacebar from toggling fullscreen
   ////////////////
   document.addEventListener('keydown', function(event) {
+    // Skip if the chat input is focused
+    if (document.activeElement && document.activeElement.id === 'chat-input') {
+      return;
+    }
+    
     // Check if the key pressed is spacebar
     if ((event.key === " " || event.code === "Space") && spacebarPrevented) {
       // Prevent the default action (toggling fullscreen)
@@ -71,6 +76,11 @@ document.addEventListener('DOMContentLoaded', async function () {
   // how to handle key presses?
   ////////////////
   document.addEventListener('keydown', async function (event) {
+    // Skip if the chat input is focused
+    if (document.activeElement && document.activeElement.id === 'chat-input') {
+      return;
+    }
+    
     // Prevent default behavior for arrow keys
     if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) {
       event.preventDefault();

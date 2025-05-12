@@ -215,9 +215,6 @@ async def instruction_display_fn(stage, container):
     ui.markdown(
       """Press the arrows keys to move the agent and p,d,t to pick up, drop, and toggle objects"""
     )
-    button = ui.button("Start Experiment")
-    await button.clicked()
-
 
 
 instruction_stage = Stage(name="Instructions", display_fn=instruction_display_fn)

@@ -26,6 +26,212 @@ _user_locks = {}
 # previous_obs_base64 = None
 # current_obs_base64 = None
 
+def convert_state_to_text(state):
+  gamestate = state.state
+
+  agent_position = gamestate.agent.position.tolist()
+  agent_direction = gamestate.agent.direction
+  # convert agent integer direction to string
+  if agent_direction == 0:
+    agent_direction = "UP"
+  elif agent_direction == 1:
+    agent_direction = "RIGHT"
+  elif agent_direction == 2:
+    agent_direction = "DOWN"
+  elif agent_direction == 3:
+    agent_direction = "LEFT"
+
+  cur_reward = state.reward
+  cur_grid = gamestate.grid
+  cur_grid = cur_grid.tolist()
+
+  state_text = (
+    f"Agent Position: {agent_position}, Agent Direction: {agent_direction}\n"
+  )
+  state_text += f"Current Reward: {cur_reward}\n"
+  state_text += """Each point in the grid is represented as a tuple (object_type, color), where:
+
+  - object_type is an integer from the Tiles class:
+      EMPTY = 0
+      FLOOR = 1
+      WALL = 2
+      BALL = 3
+      SQUARE = 4
+      PYRAMID = 5
+      GOAL = 6
+      KEY = 7
+      DOOR_LOCKED = 8
+      DOOR_CLOSED = 9
+      DOOR_OPEN = 10
+      HEX = 11
+      STAR = 12
+
+  - color is an integer from the Colors class:
+      EMPTY = 0
+      RED = 1
+      GREEN = 2
+      BLUE = 3
+      PURPLE = 4
+      YELLOW = 5
+      GREY = 6
+      BLACK = 7
+      ORANGE = 8
+      WHITE = 9
+      BROWN = 10
+      PINK = 11
+
+  Examples:
+      (3, 1)  -> red BALL
+      (6, 9)  -> white GOAL
+
+      We now give the current grid state:
+  """
+  for i in range(len(cur_grid)):
+    for j in range(len(cur_grid[i])):
+      obj_type, color = cur_grid[i][j]
+      state_text += f"({obj_type}, {color}) "
+    state_text += "\n"
+  state_text += "\n"
+  return state_text
+
+
+async def get_gemini_response(message, env_text):
+  url = f"{config.GEMINI_API_URL}?key={config.GEMINI_API_KEY}"
+  headers = {"Content-Type": "application/json"}
+
+  parts = [
+    {
+      "text": (
+        "You are a helpful assistant for a Minigrid 8x8 Empty reinforcement learning game.\n"
+        "These are the keys to control the agent:\n"
+        "ArrowUp: Move Forward\n"
+        "ArrowRight: Turn Right\n"
+        "ArrowLeft: Turn Left\n"
+        "p: Pick Up\n"
+        "d: Drop\n"
+        "t: Toggle\n"
+        "The agent can pick up, drop, and toggle the doors.\n"
+        "Current environment state:\n"
+        f"{env_text}\n"
+        "Use this information to understand the user's position and goal.\n"
+        "Give short, specific hints to help them progress.\n"
+        "Keep responses to 1-2 lines."
+      )
+    }
+  ]
+  parts.append({"text": f"Question: {message}"})
+  data = {"contents": [{"parts": parts}]}
+
+  async with httpx.AsyncClient() as client:
+    res = await client.post(url, headers=headers, json=data)
+    res.raise_for_status()
+    return res.json()["candidates"][0]["content"]["parts"][0]["text"]
+
+async def get_claude_response(message, env_text):
+  url = config.CLAUDE_API_URL
+  headers = {
+    "Content-Type": "application/json",
+    "x-api-key": config.CLAUDE_API_KEY,
+    "anthropic-version": "2023-06-01",
+  }
+
+  system_prompt = (
+    "You are a helpful assistant for a Gridworld reinforcement learning game.\n"
+    "These are the keys to control the agent:\n"
+    "ArrowUp: Move Forward\n"
+    "ArrowRight: Turn Right\n"
+    "ArrowLeft: Turn Left\n"
+    "p: Pick Up\n"
+    "d: Drop\n"
+    "t: Toggle\n"
+    "The agent can pick up, drop, and toggle the doors.\n"
+    "Use this information to understand the user's position and goal.\n"
+    "Give short, specific hints to help them progress.\n"
+    "Keep responses to 1-2 lines.\n\n"
+  )
+  user_prompt = f"Current environment state:\n{env_text}\nQuestion: {message}"
+
+  data = {
+    "model": config.CLAUDE_MODEL,
+    "max_tokens": 150,
+    "system": system_prompt,
+    "messages": [{"role": "user", "content": user_prompt}],
+  }
+
+  async with httpx.AsyncClient() as client:
+    res = await client.post(url, headers=headers, json=data)
+    res.raise_for_status()
+    return res.json()["content"][0]["text"]
+
+async def get_chatgpt_response(message, env_text):
+  url = config.CHATGPT_API_URL
+  headers = {
+    "Content-Type": "application/json",
+    "Authorization": f"Bearer {config.CHATGPT_API_KEY}",
+  }
+
+  prompt = (
+    "You are a helpful assistant for a Minigrid 8x8 Empty reinforcement learning game.\n"
+    "These are the keys to control the agent:\n"
+    "ArrowUp: Move Forward\n"
+    "ArrowRight: Turn Right\n"
+    "ArrowLeft: Turn Left\n"
+    "p: Pick Up\n"
+    "d: Drop\n"
+    "t: Toggle\n"
+    "The agent can pick up, drop, and toggle the doors.\n"
+    "Current environment state:\n"
+    f"{env_text}\n"
+    "Use this information to understand the user's position and goal.\n"
+    "Give short, specific hints to help them progress.\n"
+    "Keep responses to 1-2 lines."
+  )
+
+  data = {
+    "model": config.CHATGPT_MODEL,
+    "messages": [
+      {"role": "system", "content": prompt},
+      {"role": "user", "content": message},
+    ],
+    "max_tokens": 150,
+  }
+
+  async with httpx.AsyncClient() as client:
+    res = await client.post(url, headers=headers, json=data)
+    res.raise_for_status()
+    return res.json()["choices"][0]["message"]["content"]
+
+async def send_message(chat_input, response_box):
+  message = chat_input.value
+  try:
+    current_stage = experiment.all_stages[1]
+    env_text = ""
+    if isinstance(current_stage, stages.EnvStage):
+      timestep = current_stage.get_user_data("stage_state").timestep
+      if timestep is not None:
+        state = timestep.state
+        if state is not None:
+          # with open("env_state.txt", "w") as f:
+          #    pprint.pprint(state, stream=f)
+          env_text = convert_state_to_text(state)
+
+    # Use the persisted model selection
+    model = app.storage.user["selected_model"]
+
+    if model == "gemini":
+      response = await get_gemini_response(message, env_text)
+    elif model == "claude":
+      response = await get_claude_response(message, env_text)
+    else:  # chatgpt
+      response = await get_chatgpt_response(message, env_text)
+
+    response_box.set_content(f"**Hint:** {response}")
+    response_box.update()
+  except Exception as e:
+    response_box.set_content(f"**Error:** {str(e)}")
+    response_box.update()
+  chat_input.set_value("")
+
 
 def get_user_lock():
   user_seed = app.storage.user["seed"]
@@ -176,74 +382,6 @@ async def index(request: Request):
   def print_ping(e):
     logger.info(str(e.args))
 
-  def convert_state_to_text(state):
-    gamestate = state.state
-
-    agent_position = gamestate.agent.position.tolist()
-    agent_direction = gamestate.agent.direction
-    # convert agent integer direction to string
-    if agent_direction == 0:
-      agent_direction = "UP"
-    elif agent_direction == 1:
-      agent_direction = "RIGHT"
-    elif agent_direction == 2:
-      agent_direction = "DOWN"
-    elif agent_direction == 3:
-      agent_direction = "LEFT"
-
-    cur_reward = state.reward
-    cur_grid = gamestate.grid
-    cur_grid = cur_grid.tolist()
-
-    state_text = (
-      f"Agent Position: {agent_position}, Agent Direction: {agent_direction}\n"
-    )
-    state_text += f"Current Reward: {cur_reward}\n"
-    state_text += """Each point in the grid is represented as a tuple (object_type, color), where:
-
-- object_type is an integer from the Tiles class:
-    EMPTY = 0
-    FLOOR = 1
-    WALL = 2
-    BALL = 3
-    SQUARE = 4
-    PYRAMID = 5
-    GOAL = 6
-    KEY = 7
-    DOOR_LOCKED = 8
-    DOOR_CLOSED = 9
-    DOOR_OPEN = 10
-    HEX = 11
-    STAR = 12
-
-- color is an integer from the Colors class:
-    EMPTY = 0
-    RED = 1
-    GREEN = 2
-    BLUE = 3
-    PURPLE = 4
-    YELLOW = 5
-    GREY = 6
-    BLACK = 7
-    ORANGE = 8
-    WHITE = 9
-    BROWN = 10
-    PINK = 11
-
-Examples:
-    (3, 1)  -> red BALL
-    (6, 9)  -> white GOAL
-
-    We now give the current grid state:
-"""
-    for i in range(len(cur_grid)):
-      for j in range(len(cur_grid[i])):
-        obj_type, color = cur_grid[i][j]
-        state_text += f"({obj_type}, {color}) "
-      state_text += "\n"
-    state_text += "\n"
-    return state_text
-
   ui.on("ping", print_ping)
   ui.on("key_pressed", lambda e: global_handle_key_press(e, gameplay_container))
 
@@ -259,156 +397,20 @@ Examples:
         interval=10,
         callback=lambda: check_if_over(episode_limit=200, container=gameplay_container),
       )
-      asyncio.create_task(start_experiment(gameplay_container))
+      stage_container = ui.column()
+      asyncio.create_task(start_experiment(stage_container))
 
     with ui.column().style("flex: 1; padding: 16px; background-color: #f5f5f5;"):
       ui.markdown("## 💬 Chat with AI Assistant")
       chat_input = ui.input(placeholder="Ask for hints or clues...").style(
         "width: 100%; margin-bottom: 10px;"
-      )
+      ).props('id=chat-input')
       send_button = ui.button("Send")
       response_box = ui.markdown("Waiting for your question...").style(
         "margin-top: 10px;"
       )
 
-      async def get_gemini_response(message, env_text):
-        url = f"{config.GEMINI_API_URL}?key={config.GEMINI_API_KEY}"
-        headers = {"Content-Type": "application/json"}
-
-        parts = [
-          {
-            "text": (
-              "You are a helpful assistant for a Minigrid 8x8 Empty reinforcement learning game.\n"
-              "These are the keys to control the agent:\n"
-              "ArrowUp: Move Forward\n"
-              "ArrowRight: Turn Right\n"
-              "ArrowLeft: Turn Left\n"
-              "p: Pick Up\n"
-              "d: Drop\n"
-              "t: Toggle\n"
-              "The agent can pick up, drop, and toggle the doors.\n"
-              "Current environment state:\n"
-              f"{env_text}\n"
-              "Use this information to understand the user's position and goal.\n"
-              "Give short, specific hints to help them progress.\n"
-              "Keep responses to 1-2 lines."
-            )
-          }
-        ]
-        parts.append({"text": f"Question: {message}"})
-        data = {"contents": [{"parts": parts}]}
-
-        async with httpx.AsyncClient() as client:
-          res = await client.post(url, headers=headers, json=data)
-          res.raise_for_status()
-          return res.json()["candidates"][0]["content"]["parts"][0]["text"]
-
-      async def get_claude_response(message, env_text):
-        url = config.CLAUDE_API_URL
-        headers = {
-          "Content-Type": "application/json",
-          "x-api-key": config.CLAUDE_API_KEY,
-          "anthropic-version": "2023-06-01",
-        }
-
-        system_prompt = (
-          "You are a helpful assistant for a Gridworld reinforcement learning game.\n"
-          "These are the keys to control the agent:\n"
-          "ArrowUp: Move Forward\n"
-          "ArrowRight: Turn Right\n"
-          "ArrowLeft: Turn Left\n"
-          "p: Pick Up\n"
-          "d: Drop\n"
-          "t: Toggle\n"
-          "The agent can pick up, drop, and toggle the doors.\n"
-          "Use this information to understand the user's position and goal.\n"
-          "Give short, specific hints to help them progress.\n"
-          "Keep responses to 1-2 lines.\n\n"
-        )
-        user_prompt = f"Current environment state:\n{env_text}\nQuestion: {message}"
-
-        data = {
-          "model": config.CLAUDE_MODEL,
-          "max_tokens": 150,
-          "system": system_prompt,
-          "messages": [{"role": "user", "content": user_prompt}],
-        }
-
-        async with httpx.AsyncClient() as client:
-          res = await client.post(url, headers=headers, json=data)
-          res.raise_for_status()
-          return res.json()["content"][0]["text"]
-
-      async def get_chatgpt_response(message, env_text):
-        url = config.CHATGPT_API_URL
-        headers = {
-          "Content-Type": "application/json",
-          "Authorization": f"Bearer {config.CHATGPT_API_KEY}",
-        }
-
-        prompt = (
-          "You are a helpful assistant for a Minigrid 8x8 Empty reinforcement learning game.\n"
-          "These are the keys to control the agent:\n"
-          "ArrowUp: Move Forward\n"
-          "ArrowRight: Turn Right\n"
-          "ArrowLeft: Turn Left\n"
-          "p: Pick Up\n"
-          "d: Drop\n"
-          "t: Toggle\n"
-          "The agent can pick up, drop, and toggle the doors.\n"
-          "Current environment state:\n"
-          f"{env_text}\n"
-          "Use this information to understand the user's position and goal.\n"
-          "Give short, specific hints to help them progress.\n"
-          "Keep responses to 1-2 lines."
-        )
-
-        data = {
-          "model": config.CHATGPT_MODEL,
-          "messages": [
-            {"role": "system", "content": prompt},
-            {"role": "user", "content": message},
-          ],
-          "max_tokens": 150,
-        }
-
-        async with httpx.AsyncClient() as client:
-          res = await client.post(url, headers=headers, json=data)
-          res.raise_for_status()
-          return res.json()["choices"][0]["message"]["content"]
-
-      async def send_message():
-        message = chat_input.value
-        try:
-          current_stage = experiment.all_stages[1]
-          env_text = ""
-          if isinstance(current_stage, stages.EnvStage):
-            timestep = current_stage.get_user_data("stage_state").timestep
-            if timestep is not None:
-              state = timestep.state
-              if state is not None:
-                # with open("env_state.txt", "w") as f:
-                #    pprint.pprint(state, stream=f)
-                env_text = convert_state_to_text(state)
-
-          # Use the persisted model selection
-          model = app.storage.user["selected_model"]
-
-          if model == "gemini":
-            response = await get_gemini_response(message, env_text)
-          elif model == "claude":
-            response = await get_claude_response(message, env_text)
-          else:  # chatgpt
-            response = await get_chatgpt_response(message, env_text)
-
-          response_box.set_content(f"**Hint:** {response}")
-          response_box.update()
-        except Exception as e:
-          response_box.set_content(f"**Error:** {str(e)}")
-          response_box.update()
-        chat_input.set_value("")
-
-      send_button.on_click(send_message)
+      send_button.on_click(lambda: send_message(chat_input, response_box))
 
 
 ui.run(
