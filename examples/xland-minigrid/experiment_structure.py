@@ -122,7 +122,7 @@ async def instruction_display_fn(stage, container):
     )
 
 
-instruction_stage = Stage(name="Instuctions", display_fn=instruction_display_fn)
+instruction_stage = Stage(name="Instructions", display_fn=instruction_display_fn)
 all_stages.append(instruction_stage)
 
 

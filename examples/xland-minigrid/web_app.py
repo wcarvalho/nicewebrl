@@ -4,18 +4,39 @@ from asyncio import Lock
 from nicegui import app, ui
 from fastapi import Request
 from tortoise import Tortoise
+import time
+import traceback
+from datetime import datetime
+from importlib.util import find_spec
+import shutil
+from fastapi import APIRouter
 
 import nicewebrl
 from nicewebrl.logging import setup_logging, get_logger
 from nicewebrl.utils import wait_for_button_or_keypress
 from nicewebrl import stages
 
-import experiment_structure as experiment
-
 DATA_DIR = "data"
 DATABASE_FILE = "db.sqlite"
 
 _user_locks = {}
+
+# Add module loading management
+experiment = None
+craftax_loaded = asyncio.Event()
+load_start_time = None
+load_error = None
+
+#####################################
+# Setup logger
+#####################################
+setup_logging(
+  DATA_DIR,
+  # each user has a unique seed
+  # can use this to identify users
+  nicegui_storage_user_key="seed",
+)
+logger = get_logger("main")
 
 
 #####################################
@@ -32,6 +53,7 @@ def get_user_lock():
 
 async def experiment_not_finished():
   """Check if the experiment is not finished"""
+  global experiment
   async with get_user_lock():
     not_finished = not app.storage.user.get("experiment_finished", False)
     not_finished &= app.storage.user["stage_idx"] < len(experiment.all_stages)
@@ -45,11 +67,16 @@ async def global_handle_key_press(e, container):
   call the stage-specific key handler. When the experiment begins, we'll register
   a key listener to call this function
   """
+  global experiment
+
+  if not craftax_loaded.is_set():
+    logger.info("craftax not loaded")
+    return
 
   stage_idx = app.storage.user["stage_idx"]
   if app.storage.user["stage_idx"] >= len(experiment.all_stages):
     return
-
+  
   stage = experiment.all_stages[stage_idx]
   if stage.get_user_data("finished", False):
     return
@@ -58,18 +85,67 @@ async def global_handle_key_press(e, container):
   local_handle_key_press = stage.get_user_data("local_handle_key_press")
   if local_handle_key_press is not None:
     await local_handle_key_press()
+  
+def restore_texture_cache_if_needed():
+  """Restore texture cache files from local cache if they don't exist in the package directory."""
+  # Get paths for texture cache files
+  original_constants_directory = os.path.join(
+    os.path.dirname(find_spec("craftax.craftax.constants").origin), "assets"
+  )
+  TEXTURE_CACHE_FILE = os.path.join(original_constants_directory, "texture_cache.pbz2")
 
+  # Local cache paths
+  cache_dir = "craftax_cache"
+  source_cache = os.path.join(cache_dir, "texture_cache.pbz2")
 
-#####################################
-# Setup logger
-#####################################
-setup_logging(
-  DATA_DIR,
-  # each user has a unique seed
-  # can use this to identify users
-  nicegui_storage_user_key="seed",
-)
-logger = get_logger("main")
+  # Create the destination directories if they don't exist
+  os.makedirs(os.path.dirname(TEXTURE_CACHE_FILE), exist_ok=True)
+
+  # Copy texture cache files if needed
+  if not os.path.exists(TEXTURE_CACHE_FILE) and os.path.exists(source_cache):
+    logger.info(
+      f"Restoring texture cache from {source_cache} to {TEXTURE_CACHE_FILE}"
+    )
+    shutil.copy2(source_cache, TEXTURE_CACHE_FILE)
+    logger.info("Regular cache file restored successfully!")
+  else:
+    logger.info(f"{TEXTURE_CACHE_FILE} already exists.")
+  
+async def load_craftax_module():
+  global experiment, load_start_time, load_error
+  load_start_time = datetime.now()
+  loop = asyncio.get_event_loop()
+  logger.info("Starting craftax module load attempt")
+
+  # Restore texture cache if needed
+  restore_texture_cache_if_needed()
+
+  try:
+    logger.info("Attempting to import craftax_experiment_structure")
+
+    def import_with_logging():
+      try:
+        import experiment_structure
+        logger.info("Import successful")
+        return experiment_structure
+      except Exception as e:
+        error_msg = f"Import failed: {str(e)}\n{traceback.format_exc()}"
+        logger.error(error_msg)
+        raise
+
+    experiment = await loop.run_in_executor(None, import_with_logging)
+
+    logger.info("Craftax module loaded successfully")
+    load_duration = (datetime.now() - load_start_time).total_seconds()
+    logger.info(f"Total load time: {load_duration} seconds")
+
+  except Exception as e:
+    load_error = str(e)
+    error_msg = f"Failed to load craftax module: {str(e)}\n{traceback.format_exc()}"
+    logger.error(error_msg)
+    raise
+  finally:
+    craftax_loaded.set()
 
 #####################################
 # Setup database for storing experiment data
@@ -91,7 +167,11 @@ async def close_db() -> None:
   await Tortoise.close_connections()
 
 
-app.on_startup(init_db)
+@app.on_startup
+async def startup():
+  asyncio.create_task(load_craftax_module())
+  await init_db()
+
 app.on_shutdown(close_db)
 
 
@@ -103,6 +183,8 @@ async def start_experiment(container):
   # initialize
   # place things like consent form here or getting demographic information here
   # --------------------------------
+  global experiment
+
   if not (app.storage.user.get("experiment_started", False)):
     # NOTE: Here is where you can add a consent form or collect demographic information
     app.storage.user["experiment_started"] = True
@@ -211,7 +293,6 @@ async def run_stage(stage, container):
 # Root page
 #####################################
 
-
 async def check_if_over(container, episode_limit=60):
   minutes_passed = nicewebrl.get_user_session_minutes()
   minutes_passed = app.storage.user["session_duration"]
@@ -219,6 +300,111 @@ async def check_if_over(container, episode_limit=60):
     # define custom behavior on time-out
     pass
 
+# Add status endpoint for loading screen
+router = APIRouter()
+
+@router.get("/status")
+async def get_status():
+  """Enhanced status endpoint with detailed loading information"""
+  global load_start_time, load_error
+
+  current_time = datetime.now()
+  load_duration = (
+    None
+    if load_start_time is None
+    else (current_time - load_start_time).total_seconds()
+  )
+
+  return {
+    "loaded": craftax_loaded.is_set(),
+    "load_duration": load_duration,
+    "load_error": load_error,
+    "load_start_time": load_start_time.isoformat() if load_start_time else None,
+  }
+
+
+app.include_router(router)
+
+# helper to show loading screen
+def show_loading_screen(craftax_loaded: asyncio.Event, load_error: str | None = None):
+    """Displays a loading UI while waiting for the Craftax module to load."""
+
+    # Inject JS to ping the server periodically
+    with open(nicewebrl.basic_javascript_file()) as f:
+        ui.add_body_html("<script>" + f.read() + "</script>")
+
+    # If the module isn't loaded, show loading UI
+    if not craftax_loaded.is_set():
+        with ui.card().classes("fixed-center") as card:
+            card.style("width: 80vw; max-height: 90vh;")
+
+            ui.label("Loading experiment... This will take up to 5 minutes.").classes("text-h4")
+            ui.label("Please don't close or refresh the page")
+
+            elapsed_label = ui.label("Time elapsed: 0 seconds")
+            status_label = ui.label("Current status: Initializing...")
+            error_label = ui.label().classes("text-red")
+
+            start_time = time.time()
+
+            async def update_loading_info():
+                seconds = int(time.time() - start_time)
+                elapsed_label.text = f"Time elapsed: {seconds} seconds"
+
+                if load_error:
+                    error_label.text = f"Error: {load_error}"
+                    status_label.text = "Status: Failed to load"
+
+                if seconds % 10 == 0:
+                    ui.run_javascript(f"console.log('loading for {seconds} seconds')")
+                    logger.info(f"Still loading after {seconds} seconds")
+
+                return not craftax_loaded.is_set()
+
+            # Periodic update every 1 second
+            ui.timer(1.0, update_loading_info)
+
+            # Add client-side status polling and error logging
+            ui.add_body_html("""
+                <script>
+                let lastPingTime = Date.now();
+                
+                async function checkStatus() {
+                    try {
+                        const response = await fetch('/status');
+                        const data = await response.json();
+
+                        console.log('Status check:', data);
+
+                        if (data.loaded) {
+                            console.log('Module loaded, reloading page');
+                            window.location.reload();
+                        } else if (data.load_error) {
+                            console.error('Loading error:', data.load_error);
+                        }
+
+                        const currentTime = Date.now();
+                        const timeSinceLastPing = currentTime - lastPingTime;
+                        console.log('Time since last ping:', timeSinceLastPing, 'ms');
+                        lastPingTime = currentTime;
+
+                        if (!data.loaded) {
+                            setTimeout(checkStatus, 1000);
+                        }
+                    } catch (error) {
+                        console.error('Status check failed:', error);
+                        setTimeout(checkStatus, 1000);
+                    }
+                }
+
+                checkStatus();
+
+                window.onerror = function(msg, url, line) {
+                    console.error('JavaScript error:', msg, 'at', url, 'line', line);
+                    return false;
+                };
+                </script>
+            """)
 
 @ui.page("/")
 async def index(request: Request):
@@ -238,6 +424,13 @@ async def index(request: Request):
     logger.info(str(e.args))
 
   ui.on("ping", print_ping)
+
+  ################
+  # Show loading screen
+  ################
+  if not craftax_loaded.is_set():
+    show_loading_screen(craftax_loaded, load_error)
+    return
 
   ################
   # Start experiment
@@ -274,7 +467,14 @@ async def index(request: Request):
 
 ui.run(
   storage_secret="private key to secure the browser session cookie",
+  host="0.0.0.0",
+  port=8080,
   # reload='FLY_ALLOC_ID' not in os.environ,
   reload=False,
+<<<<<<< HEAD:examples/crafter/web_app.py
+  title="Crafter Web App",
+)
+=======
   title="XLand-MiniGrid Web App",
 )
+>>>>>>> main:examples/xland-minigrid/web_app.py
