@@ -162,7 +162,7 @@ async def env_stage_display_fn(
         # --------------------------------
         ui.html(make_image_html(src=state_image))
 
-def evaluate_success_fn(timestep: nicewebrl.TimeStep):
+def evaluate_success_fn(timestep: nicewebrl.TimeStep, env_params: struct.PyTreeNode):
     """Episode finishes if person every gets 1 achievement"""
     # success = int(timestep.state.terminal)
     # return success
