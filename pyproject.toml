@@ -55,6 +55,7 @@ xland-assistant = [
     "httpx>=0.24.0",
     "uvicorn>=0.15.0",
     "tqdm",
+    "google-cloud-storage",
 ]
 
 [project.urls]

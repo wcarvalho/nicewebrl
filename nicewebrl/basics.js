@@ -61,6 +61,7 @@ document.addEventListener('DOMContentLoaded', async function () {
   document.addEventListener('keydown', function(event) {
     // Skip if the chat input is focused
     if (document.activeElement && document.activeElement.id === 'chat-input') {
+      console.log('chat input focused');
       return;
     }
     
@@ -78,11 +79,13 @@ document.addEventListener('DOMContentLoaded', async function () {
   document.addEventListener('keydown', async function (event) {
     // Skip if the chat input is focused
     if (document.activeElement && document.activeElement.id === 'chat-input') {
+      console.log('chat input focused');
       return;
     }
     
     // Prevent default behavior for arrow keys
     if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) {
+      console.log('preventing default arrow key behavior');
       event.preventDefault();
     }
 

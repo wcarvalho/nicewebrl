@@ -6,13 +6,14 @@ from nicegui import ui, app, Client
 import asyncio
 from nicewebrl.logging import get_logger
 import jax
+import json
 import jax.numpy as jnp
 import msgpack
 import os.path
 import random
 from datetime import datetime
 import struct
-
+from fastapi import Request
 logger = get_logger(__name__)
 
 _user_locks = {}
@@ -178,7 +179,7 @@ def multihuman_javascript_file():
   return file
 
 
-def initialize_user(seed: int = 0, *kwargs):
+def initialize_user(*, seed: int = 0, request: Request = None):
   """
   Initialize user-specific data and settings.
 
@@ -201,6 +202,36 @@ def initialize_user(seed: int = 0, *kwargs):
   )
   app.storage.user["session_duration"] = 0
 
+  ############################################################
+  # Log worker information from Mturk
+  ############################################################
+  if request is not None:
+    app.storage.user["worker_id"] = request.query_params.get("workerId", None)
+    app.storage.user["hit_id"] = request.query_params.get("hitId", None)
+    app.storage.user["assignment_id"] = request.query_params.get("assignmentId", None)
+
+    app.storage.user["user_id"] = (
+      app.storage.user["worker_id"] or app.storage.user["seed"]
+    )
+
+  ############################################################
+  # needed to maintain connection to client
+  ############################################################
+  def print_ping(e):
+    logger.info(str(e.args))
+  ui.on("ping", print_ping)
+
+def user_data_file():
+  return f"user_data_{app.storage.user['seed']}.msgpack"
+
+def user_metadata_file():
+  return f"user_data_{app.storage.user['seed']}.json"
+
+def save_metadata(metadata: Dict, filepath: str = None):
+  filepath = user_data_file()
+  import pdb; pdb.set_trace()
+  with open(filepath, "a") as f:
+    f.write(json.dumps(metadata))
 
 def get_user_session_minutes():
   start_time = datetime.fromisoformat(app.storage.user["session_start"])
@@ -209,7 +240,6 @@ def get_user_session_minutes():
   minutes_passed = duration.total_seconds() / 60
   app.storage.user["session_duration"] = minutes_passed
   return minutes_passed
-
 
 def broadcast_message(event: str, message: str):
   called_by_user_id = str(app.storage.user["seed"])
@@ -220,7 +250,6 @@ def broadcast_message(event: str, message: str):
   for client in Client.instances.values():
     with client:
       ui.run_javascript(fn)
-
 
 async def write_msgpack_record(f, data):
   """Write a length-prefixed msgpack record to a file.

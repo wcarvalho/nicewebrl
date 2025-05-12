@@ -209,6 +209,9 @@ class Stage:
   async def handle_button_press(self, container):
     await self.finish_stage()
 
+  async def finish_saving_user_data(self):
+    pass
+
 
 @dataclasses.dataclass
 class FeedbackStage(Stage):
@@ -317,7 +320,7 @@ class EnvStage(Stage):
 
     if self.user_save_file_fn is None:
       self.user_save_file_fn = (
-        lambda: f"data/user={app.storage.user.get('seed')}.msgpack"
+        lambda: f"data/user={app.storage.user.get('user_id')}.msgpack"
       )
 
     if self.check_finished is None:

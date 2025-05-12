@@ -11,12 +11,12 @@ import nicewebrl
 from nicewebrl.logging import setup_logging, get_logger
 from nicewebrl.utils import wait_for_button_or_keypress
 from nicewebrl import stages
+import time
+from google_cloud_utils import save_to_gcs_with_retries, save_file_to_gcs
 
-import experiment_structure as experiment
-import config  # Import the config file
+from experiment_structure import experiment
+import config
 
-import ipdb
-import pprint
 
 DATA_DIR = "data"
 DATABASE_FILE = "db.sqlite"
@@ -204,7 +204,7 @@ async def get_chatgpt_response(message, env_text):
 async def send_message(chat_input, response_box):
   message = chat_input.value
   try:
-    current_stage = experiment.all_stages[1]
+    current_stage = await experiment.get_stage()
     env_text = ""
     if isinstance(current_stage, stages.EnvStage):
       timestep = current_stage.get_user_data("stage_state").timestep
@@ -240,19 +240,13 @@ def get_user_lock():
   return _user_locks[user_seed]
 
 
-async def experiment_not_finished():
-  async with get_user_lock():
-    not_finished = not app.storage.user.get("experiment_finished", False)
-    not_finished &= app.storage.user["stage_idx"] < len(experiment.all_stages)
-  return not_finished
-
-
 async def global_handle_key_press(e, container):
-  stage_idx = app.storage.user["stage_idx"]
-  if app.storage.user["stage_idx"] >= len(experiment.all_stages):
+  logger.info("global_handle_key_press")
+  if experiment.finished():
+    logger.info("Experiment finished")
     return
 
-  stage = experiment.all_stages[stage_idx]
+  stage = await experiment.get_stage()
   if stage.get_user_data("finished", False):
     return
 
@@ -285,37 +279,225 @@ app.on_startup(init_db)
 app.on_shutdown(close_db)
 
 
-async def start_experiment(container):
-  if app.storage.user.get("experiment_running", False):
-    return
-  app.storage.user["experiment_running"] = True
-  try:
-    if not app.storage.user.get("experiment_started", False):
-      app.storage.user["experiment_started"] = True
-    logger.info("Starting experiment")
-    while True and await experiment_not_finished():
-      stage_idx = app.storage.user["stage_idx"]
-      stage = experiment.all_stages[stage_idx]
-      logger.info("=" * 30)
-      logger.info(f"Began stage '{stage.name}'")
-      await run_stage(stage, container)
-      logger.info(f"Finished stage '{stage.name}'")
-      if isinstance(stage, stages.EnvStage):
-        await stage.finish_saving_user_data()
-        logger.info(f"Saved data for stage '{stage.name}'")
-      async with get_user_lock():
-        app.storage.user["stage_idx"] = stage_idx + 1
-      if app.storage.user["stage_idx"] >= len(experiment.all_stages):
-        break
-    await finish_experiment(container)
-  finally:
-    app.storage.user["experiment_running"] = False
+#####################################
+# Consent Form and demographic info
+#####################################
+
+async def make_consent_form(container):
+  consent_given = asyncio.Event()
+  with container:
+    ui.markdown("## Consent Form")
+    with open("consent.md", "r") as consent_file:
+      consent_text = consent_file.read()
+    ui.markdown(consent_text)
+    def on_change():
+      print("on_change")
+      consent_given.set()
+    ui.checkbox("I agree to participate.", on_change=on_change)
+  print("waiting for consent")
+  await consent_given.wait()
+
+
+async def collect_demographic_info(container):
+  # Create a markdown title for the section
+  nicewebrl.clear_element(container)
+  collected_demographic_info_event = asyncio.Event()
+  with container:
+    ui.markdown("## Demographic Info")
+    ui.markdown("Please fill out the following information.")
+
+    with ui.column():
+      with ui.column():
+        ui.label("Biological Sex")
+        sex_input = ui.radio(["Male", "Female"], value="Male").props("inline")
+
+      # Collect age with a textbox input
+      age_input = ui.input("Age")
+
+    # Button to submit and store the data
+    async def submit():
+      age = age_input.value
+      sex = sex_input.value
+
+      # Validation for age input
+      if not age.isdigit() or not (0 < int(age) < 100):
+        ui.notify("Please enter a valid age between 1 and 99.", type="warning")
+        return
+      app.storage.user["age"] = int(age)
+      app.storage.user["sex"] = sex
+      logger.info(f"age: {int(age)}, sex: {sex}")
+      collected_demographic_info_event.set()
+
+    button = ui.button("Submit", on_click=submit)
+    await button.clicked()
+
+
+async def start_experiment(meta_container, stage_container, llm_container):
+
+  # ========================================
+  # Consent form and demographic info
+  # ========================================
+  if not (app.storage.user.get("experiment_started", False)):
+    await make_consent_form(stage_container)
+    await collect_demographic_info(stage_container)
+    app.storage.user["experiment_started"] = True
+
+  # ========================================
+  # Force fullscreen
+  # ========================================
+  #ui.run_javascript("window.require_fullscreen = true")
+
+  # ========================================
+  # Register global key press handler
+  # ========================================
+  ui.on("key_pressed", lambda e: global_handle_key_press(e, stage_container))
+
+  # ========================================
+  # LLM container
+  # ========================================
+  with llm_container:
+    ui.markdown("## 💬 Chat with AI Assistant")
+    chat_input = ui.input(placeholder="Ask for hints or clues...").style(
+      "width: 100%; margin-bottom: 10px;"
+    ).props('id=chat-input')
+    send_button = ui.button("Send")
+    response_box = ui.markdown("Waiting for your question...").style(
+      "margin-top: 10px;"
+    )
+    send_button.on_click(lambda: send_message(chat_input, response_box))
+
+  # ========================================
+  # Start experiment
+  # ========================================
+  logger.info("Starting experiment")
+
+  while not experiment.finished():
+    stage = await experiment.get_stage()
+    await run_stage(stage, stage_container)
+    await stage.finish_saving_user_data()
+    await experiment.advance_stage()
+
+  await finish_experiment(meta_container)
 
 
 async def finish_experiment(container):
   nicewebrl.clear_element(container)
   with container:
     ui.markdown("# Experiment over")
+
+  #########################
+  # Save data
+  #########################
+  async def submit(feedback):
+    app.storage.user["experiment_finished"] = True
+    status_container = None
+    with container:
+      nicewebrl.clear_element(container)
+      ui.markdown(
+        "## Your data is being saved. Please do not close or refresh the page."
+      )
+      status_container = ui.markdown("Saving local files...")
+
+    try:
+      # Create a task for the save operation with a timeout
+      save_task = asyncio.create_task(save_data(feedback=feedback))
+      start_time = time.time()
+
+      # Update status every 2 seconds while waiting for save
+      while not save_task.done():
+        elapsed_seconds = int(time.time() - start_time)
+        status_container.content = (
+          f"Still saving... ({elapsed_seconds}s elapsed). This may take 5-10 minutes."
+        )
+        try:
+          # Wait for either task completion or timeout
+          await asyncio.wait_for(asyncio.shield(save_task), timeout=2.0)
+        except asyncio.TimeoutError:
+          # This is expected - we use timeout to update status
+          continue
+        except Exception as e:
+          logger.error(f"Error during save: {e}")
+          status_container.content = (
+            "⚠️ Error saving data. Please contact the experimenter."
+          )
+          raise
+
+      # If we get here, save was successful
+      elapsed_seconds = int(time.time() - start_time)
+      status_container.content = (
+        f"✅ Save complete in {elapsed_seconds}s! Moving to next screen..."
+      )
+      app.storage.user["data_saved"] = True
+
+    except Exception as e:
+      logger.error(f"Save failed: {e}")
+      status_container.content = "⚠️ Error saving data. Please contact the experimenter."
+      raise
+
+  app.storage.user["data_saved"] = app.storage.user.get("data_saved", False)
+  if not app.storage.user["data_saved"]:
+    with container:
+      nicewebrl.clear_element(container)
+      ui.markdown(
+        "Please provide feedback on the experiment here. For example, please describe if anything went wrong or if you have any suggestions for the experiment."
+      )
+      text = ui.textarea().style("width: 80%;")  # Set width to 80% of the container
+      button = ui.button("Submit")
+      await button.clicked()
+      await submit(text.value)
+
+  #########################
+  # Final screen
+  #########################
+  with container:
+    nicewebrl.clear_element(container)
+    ui.markdown("# Experiment over")
+    ui.markdown("## Data saved")
+    ui.markdown(
+      "### Please record the following code which you will need to provide for compensation"
+    )
+    ui.markdown("### 'carvalho.assistants'")
+    ui.markdown("#### You may close the browser")
+
+async def save_data(feedback=None, **kwargs):
+  global experiment_structure, config
+  user_data_file = nicewebrl.user_data_file()
+  user_metadata_file = nicewebrl.user_metadata_file()
+
+
+  # --------------------------------
+  # save user data to final line of file
+  # --------------------------------
+  user_storage = nicewebrl.make_serializable(dict(app.storage.user))
+  metadata = dict(
+    finished=True,
+    feedback=feedback,
+    user_storage=user_storage,
+    **kwargs,
+  )
+  nicewebrl.save_metadata(metadata, user_metadata_file)
+
+  files_to_save = [user_data_file, user_metadata_file]
+  logger.info(f"Saving to bucket: {config.BUCKET_NAME}")
+  await save_to_gcs_with_retries(
+    files_to_save,
+    max_retries=5,
+    bucket_name=config.BUCKET_NAME,
+  )
+
+  # Try to delete local files after successful upload
+  from nicewebrl.stages import StageStateModel
+  logger.info(f"Deleting data for user {app.storage.browser['id']}")
+  await StageStateModel.filter(session_id=app.storage.browser["id"]).delete()
+  logger.info(
+    f"Successfully deleted stage inforation for user {app.storage.browser['id']}"
+  )
+  for local_file in files_to_save:
+    try:
+      os.remove(local_file)
+      logger.info(f"Successfully deleted local file: {local_file}")
+    except Exception as e:
+      logger.warning(f"Failed to delete local file {local_file}: {str(e)}")
 
 
 async def run_stage(stage, container):
@@ -363,58 +545,50 @@ async def check_if_over(container, episode_limit=60):
 
 @ui.page("/")
 async def index(request: Request):
-  user_info = dict(
-    worker_id=request.query_params.get("workerId", None),
-    hit_id=request.query_params.get("hitId", None),
-    assignment_id=request.query_params.get("assignmentId", None),
-  )
 
-  app.storage.user["stage_idx"] = app.storage.user.get("stage_idx", 0)
-  nicewebrl.initialize_user()
+  nicewebrl.initialize_user(request=request)
+  await experiment.initialize()
 
   model_list = ["gemini", "claude", "chatgpt"]
   # Initialize random model selection if not already set
   if "selected_model" not in app.storage.user:
-    import random
-
-    app.storage.user["selected_model"] = random.choice(model_list)
-
-  def print_ping(e):
-    logger.info(str(e.args))
-
-  ui.on("ping", print_ping)
-  ui.on("key_pressed", lambda e: global_handle_key_press(e, gameplay_container))
+    rng = nicewebrl.new_rng()
+    idx = jax.random.randint(rng, (), 0, len(model_list))
+    app.storage.user["selected_model"] = model_list[int(idx)]
 
   basic_javascript_file = nicewebrl.basic_javascript_file()
   with open(basic_javascript_file) as f:
     ui.add_body_html("<script>" + f.read() + "</script>")
 
-  with ui.row().style("width: 100vw; height: 100vh; overflow: hidden;"):
-    with ui.column().style(
-      "flex: 1; padding: 16px; overflow-y: auto;"
-    ) as gameplay_container:
+  card = (
+    ui.card(align_items=["center"])
+    .classes("fixed-center")
+    .style(
+      "width: 80vw;"  # Set width to 90% of viewport width
+      "max-height: 90vh;"  # Keep the same max height
+      "overflow: auto;"
+      "display: flex;"
+      "flex-direction: column;"
+      "justify-content: flex-start;"
+      "align-items: center;"
+      "padding: 1rem;"
+    )
+  )
+  with card:
+    meta_container = ui.row()
+    with meta_container.style("align-items: center;"):
+      stage_container = ui.column()
+      llm_container = ui.column().style("flex: 1; padding: 16px; background-color: #f5f5f5;")
       ui.timer(
         interval=10,
-        callback=lambda: check_if_over(episode_limit=200, container=gameplay_container),
+        callback=lambda: check_if_over(episode_limit=200, container=stage_container),
       )
-      stage_container = ui.column()
-      asyncio.create_task(start_experiment(stage_container))
-
-    with ui.column().style("flex: 1; padding: 16px; background-color: #f5f5f5;"):
-      ui.markdown("## 💬 Chat with AI Assistant")
-      chat_input = ui.input(placeholder="Ask for hints or clues...").style(
-        "width: 100%; margin-bottom: 10px;"
-      ).props('id=chat-input')
-      send_button = ui.button("Send")
-      response_box = ui.markdown("Waiting for your question...").style(
-        "margin-top: 10px;"
-      )
-
-      send_button.on_click(lambda: send_message(chat_input, response_box))
+      await start_experiment(meta_container, stage_container, llm_container)
 
 
 ui.run(
   storage_secret="private key to secure the browser session cookie",
-  reload=False,
+  reload="FLY_ALLOC_ID" not in os.environ,
   title="Minigrid Web App",
+  port=8080,
 )

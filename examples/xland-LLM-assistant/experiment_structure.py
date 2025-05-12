@@ -134,7 +134,7 @@ def describe_goal(encoding):
 
 def create_env_with_ruleset(ruleset_key):
   env, env_params = xminigrid.make("XLand-MiniGrid-R1-9x9")
-  benchmark = xminigrid.load_benchmark(name="trivial-1m")
+  benchmark = xminigrid.load_benchmark(name="medium-1m")
   rule = benchmark.sample_ruleset(jax.random.key(ruleset_key))
   rule_text = describe_goal(rule.goal)
   env_params = env_params.replace(ruleset=rule)
@@ -213,7 +213,12 @@ async def instruction_display_fn(stage, container):
     nicewebrl.clear_element(container)
     ui.markdown(f"## {stage.name}")
     ui.markdown(
-      """Press the arrows keys to move the agent and p,d,t to pick up, drop, and toggle objects"""
+      """Press the arrows keys to move the agent 
+      
+      Press:
+      - p to pick up an object
+      - d to drop an object
+      - t to transform an object"""
     )
 
 
@@ -286,3 +291,8 @@ for i, (jax_web_env, env_params) in enumerate(jax_web_envs):
     ),
   )
   all_stages.append(environment_stage)
+
+experiment = nicewebrl.SimpleExperiment(
+  stages=all_stages,
+  randomize=[False] + [True] * (len(all_stages) - 1),
+  )
