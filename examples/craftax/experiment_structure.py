@@ -1,17 +1,16 @@
-from enum import IntEnum
 import jax
 import jax.numpy as jnp
 from typing import Optional
 from nicegui import ui
 
 from flax import struct
-
-import xminigrid
-from xminigrid.experimental.img_obs import _render_obs
+from craftax.craftax.renderer import render_craftax_pixels
+from craftax.craftax_env import make_craftax_env_from_name
+from craftax.craftax.constants import Action, BLOCK_PIXEL_SIZE_HUMAN
 
 
 import nicewebrl
-from nicewebrl import JaxWebEnv, base64_npimage, TimeStep
+from nicewebrl import JaxWebEnv, base64_npimage, TimeStep, TimestepWrapper
 from nicewebrl import Stage, EnvStage
 from nicewebrl import get_logger
 
@@ -27,76 +26,41 @@ VERBOSITY = 1
 ########################################
 # Define actions and corresponding keys
 ########################################
-# actions defined here: https://github.com/dunnolab/xland-minigrid/blob/a46e78ce92f28bc90b8aac96d3b7b7792fb5bf3b/src/xminigrid/core/actions.py#L112
-
-class Actions(IntEnum):
-  FORWARD = 0
-  RIGHT = 1
-  LEFT = 2
-  PICKUP = 3  
-  PUTDOWN = 4
-  TOGGLE = 5
-
-actions = [Actions.FORWARD, Actions.RIGHT, Actions.LEFT, Actions.PICKUP, Actions.PUTDOWN, Actions.TOGGLE]
-
+actions = [Action.RIGHT, Action.DOWN, Action.LEFT, Action.UP, Action.DO]
 action_array = jnp.array([a.value for a in actions])
-action_keys = [
-  "ArrowUp", "ArrowRight", "ArrowLeft", "p", 'l', ' ']
+action_keys = ["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp", " "]
 action_to_name = [a.name for a in actions]
 
 ########################################
 # Define Craftax environment
 ########################################
 # make environment
-class FixXlandArgsWrapper:
-  """Making reset and step functions match nicewebrl.JaxWebEnv"""
+jax_env = make_craftax_env_from_name("Craftax-Symbolic-v1", auto_reset=False)
+dummy_env_params = jax_env.default_params
 
-  def __init__(self, env):
-    self._env = env
-
-  # provide proxy access to regular attributes of wrapped object
-  def __getattr__(self, name):
-    return getattr(self._env, name)
-
-  def reset(self, key: jax.Array, params: struct.PyTreeNode) -> nicewebrl.TimeStep:
-    return self._env.reset(params=params, key=key)
-
-  def step(self, key: jax.Array, prior_timestep: nicewebrl.TimeStep, action: jax.Array, params: struct.PyTreeNode) -> nicewebrl.TimeStep:
-    del key
-    return self._env.step(params=params, timestep=prior_timestep, action=action)
-
-# to list available environments: xminigrid.registered_environments()
-jax_env, env_params = xminigrid.make("XLand-MiniGrid-R9-25x25")
-
-key = jax.random.key(0)
-reset_key, ruleset_key = jax.random.split(key)
-
-# to list available benchmarks: xminigrid.registered_benchmarks()
-benchmark = xminigrid.load_benchmark(name="trivial-1m")
-# choosing ruleset, see section on rules and goals
-ruleset = benchmark.sample_ruleset(ruleset_key)
-env_params = env_params.replace(ruleset=ruleset)
-
+# NiceWebRL exploits a `TimeStep` object for checking episode conditions
+# wrap environment in wrapper if needed
+jax_env = TimestepWrapper(jax_env, autoreset=True)
 
 # create web environment wrapper
-jax_env = FixXlandArgsWrapper(jax_env)
 jax_web_env = JaxWebEnv(env=jax_env, actions=action_array)
 
 # Call this function to pre-compile jax functions before experiment starts.
-jax_web_env.precompile(dummy_env_params=env_params)
+jax_web_env.precompile(dummy_env_params=dummy_env_params)
 
 
 # Define rendering function
 def render_fn(timestep: nicewebrl.TimeStep):
-  image = _render_obs(timestep.observation)
+  image = render_craftax_pixels(timestep.state, block_pixel_size=BLOCK_PIXEL_SIZE_HUMAN)
   return image.astype(jnp.uint8)
+
 
 # jit it so fast
 render_fn = jax.jit(render_fn)
 
 # precompile vmapped render fn that will vmap over all actions
 vmap_render_fn = jax_web_env.precompile_vmap_render_fn(
-  render_fn, env_params
+  render_fn, jax_env.default_params
 )
 
 
@@ -116,8 +80,7 @@ async def instruction_display_fn(stage, container):
     ui.markdown(
       """
           - Press the arrow keys to move the agent
-          - Press the space bar to 'toggle' objects
-          - Press 'p' to pickup objects and 'l' to put them down
+          - Press the space bar to interact with objects
           """
     )
 
@@ -129,11 +92,16 @@ all_stages.append(instruction_stage)
 # ------------------
 # Environment stage
 # ------------------
+# EXAMPLE: change parameters for this specific stage
+env_params = jax_env.default_params.replace(
+  max_timesteps=MAX_EPISODE_TIMESTEPS,
+)
+
 
 def make_image_html(src):
   html = f"""
   <div id="stateImageContainer" style="display: flex; justify-content: center; align-items: center;">
-      <img id="stateImage" src="{src}" style="width: 200%; height: 200%; object-fit: contain;">
+      <img id="stateImage" src="{src}" style="width: 50%; height: 50%; object-fit: contain;">
   </div>
   """
   return html
@@ -168,8 +136,9 @@ async def env_stage_display_fn(
 
 
 def evaluate_success_fn(timestep: TimeStep, params: Optional[struct.PyTreeNode] = None):
-  """Episode finishes if reward observated"""
-  success = timestep.reward.sum() > 0
+  """Episode finishes if person gets 5 achievements"""
+  achievements = timestep.state.achievements.astype(jnp.float32)
+  success = achievements.sum() >= 5
   return success
 
 
@@ -182,7 +151,6 @@ environment_stage = EnvStage(
   render_fn=render_fn,
   vmap_render_fn=vmap_render_fn,
   display_fn=env_stage_display_fn,
-  autoreset_on_done=True,
   evaluate_success_fn=evaluate_success_fn,
   min_success=MIN_SUCCESS_EPISODES,
   max_episodes=MAX_STAGE_EPISODES,
