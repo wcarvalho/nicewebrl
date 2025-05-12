@@ -12,7 +12,8 @@ from nicewebrl.logging import setup_logging, get_logger
 from nicewebrl.utils import wait_for_button_or_keypress
 from nicewebrl import stages, TimeStep, EnvParams
 import time
-from google_cloud_utils import save_to_gcs_with_retries
+import json
+from google_cloud_utils import save_to_gcs_with_retries, GOOGLE_CREDENTIALS
 
 from experiment_structure import experiment, describe_ruleset
 import config
@@ -67,11 +68,8 @@ def get_object_name(object_type: int, object_color: int):
 
 def convert_state_to_text(
   timestep: TimeStep,
-  env_params: EnvParams,
+  rule_text: str,
 ):
-
-  ruleset = env_params.ruleset
-  rule_description = describe_ruleset(ruleset)
 
   gamestate = timestep.state
 
@@ -96,8 +94,9 @@ def convert_state_to_text(
 
   state_text += f"""
   The current rule description is:
-  {rule_description}
+  {rule_text}
   "GOAL" describes the goal of the current episode. "RULES" describe how objects can be transformed together this episode. "INIT TILES" describe the initial objects in the environment.
+  Note that goals are described with relative positions (e.g. to the right of). Make sure to note this.
 
   We now give the current grid state:
   """
@@ -229,9 +228,9 @@ async def send_message(chat_input, response_box):
     env_text = ""
     if isinstance(current_stage, stages.EnvStage):
       timestep = current_stage.get_user_data("stage_state").timestep
-      env_params = current_stage.env_params
       if timestep is not None and timestep.state is not None:
-        env_text = convert_state_to_text(timestep, env_params)
+        rule_text = current_stage.get_user_data("rule_text")
+        env_text = convert_state_to_text(timestep, rule_text)
 
     # Use the persisted model selection
     model = app.storage.user["selected_model"]
@@ -246,7 +245,6 @@ async def send_message(chat_input, response_box):
     response_box.set_content(f"**Hint:** {response}")
     response_box.update()
   except Exception as e:
-    import ipdb; ipdb.set_trace()
     response_box.set_content(f"**Error:** {str(e)}")
     response_box.update()
   chat_input.set_value("")
@@ -484,7 +482,10 @@ async def finish_experiment(container):
 
 
 async def save_data(feedback=None, **kwargs):
-  global experiment_structure, config
+  if not GOOGLE_CREDENTIALS:
+    logger.warning("No Google credentials found, skipping save")
+    return
+
   user_data_file = nicewebrl.user_data_file()
   user_metadata_file = nicewebrl.user_metadata_file()
 
@@ -498,7 +499,9 @@ async def save_data(feedback=None, **kwargs):
     user_storage=user_storage,
     **kwargs,
   )
-  nicewebrl.save_metadata(metadata, user_metadata_file)
+  
+  with open(user_metadata_file, "w") as f:
+    json.dump(metadata, f)
 
   files_to_save = [user_data_file, user_metadata_file]
   logger.info(f"Saving to bucket: {config.BUCKET_NAME}")

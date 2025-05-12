@@ -14,10 +14,6 @@ load_dotenv()
 logger = get_logger(__name__)
 
 GOOGLE_CREDENTIALS = "./google-cloud-key.json"
-if not os.path.exists(GOOGLE_CREDENTIALS):
-  raise FileNotFoundError(
-    f"Google Cloud credentials file {GOOGLE_CREDENTIALS} not found"
-  )
 
 
 def initialize_storage_client(bucket_name: str):

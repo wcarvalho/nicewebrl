@@ -22,6 +22,7 @@ from nicewebrl.utils import retry_with_exponential_backoff
 from nicewebrl.utils import write_msgpack_record
 from nicewebrl.nicejax import JaxWebEnv
 from nicewebrl.container import Container
+from nicewebrl import user_data_file
 
 
 FeedbackFn = Callable[[struct.PyTreeNode], Dict]
@@ -223,6 +224,13 @@ class FeedbackStage(Stage):
   next_button: bool = False
   user_save_file_fn: Callable[[], str] = None
 
+  def __post_init__(self):
+    self.user_data = {}
+    self._lock = Lock()  # Add lock for thread safety
+    self._user_locks = {}  # Dictionary to store per-user locks
+    if self.user_save_file_fn is None:
+      self.user_save_file_fn = user_data_file
+
   async def activate(self, container: ui.element):
     results = await self.display_fn(stage=self, container=container)
     user_data = dict(
@@ -319,9 +327,8 @@ class EnvStage(Stage):
       self.action_to_name = {k: v for k, v in enumerate(self.action_to_name)}
 
     if self.user_save_file_fn is None:
-      self.user_save_file_fn = (
-        lambda: f"data/user={app.storage.user.get('user_id')}.msgpack"
-      )
+      self.user_save_file_fn = user_data_file
+
 
     if self.check_finished is None:
       self.check_finished = lambda timestep: False

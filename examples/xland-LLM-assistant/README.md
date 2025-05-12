@@ -13,4 +13,19 @@ cd examples/xland-minigrid
 python web_app_assistant.py
 ```
 
-## Launching online
+## Launching online with fly.io
+
+```
+# setup configuration
+flyctl launch \
+--dockerfile Dockerfile \
+--name xland-assistant \
+--config xland-assistant.toml \
+--vm-size 'performance-2x'
+
+# deploy to servers
+flyctl deploy --config xland-assistant.toml
+
+# scale to multiple regions (useful for decreasing latency)
+flyctl scale count 10 --config xland-assistant.toml --region "iad,sea,lax,den"  --yes
+```

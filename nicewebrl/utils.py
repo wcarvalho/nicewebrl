@@ -226,19 +226,15 @@ def initialize_user(*, seed: int = 0, request: Request = None):
 
 
 def user_data_file():
-  return f"user_data_{app.storage.user['seed']}.msgpack"
+  return f"data/user_data_{app.storage.user['seed']}.msgpack"
 
 
 def user_metadata_file():
-  return f"user_data_{app.storage.user['seed']}.json"
+  return f"data/user_data_{app.storage.user['seed']}.json"
 
 
-def save_metadata(metadata: Dict, filepath: str = None):
-  filepath = user_data_file()
-  import pdb
-
-  pdb.set_trace()
-  with open(filepath, "a") as f:
+def save_metadata(metadata: Dict, filepath: str):
+  with open(filepath, "w") as f:
     f.write(json.dumps(metadata))
 
 

@@ -3,10 +3,10 @@ import jax
 import jax.numpy as jnp
 from typing import Optional
 from nicegui import ui
-
+import asyncio
 import nicewebrl
 from nicewebrl import JaxWebEnv, base64_npimage, TimeStep, TimestepWrapper
-from nicewebrl import Stage, EnvStage
+from nicewebrl import Stage, EnvStage, FeedbackStage
 from nicewebrl import get_logger
 import xminigrid
 from xminigrid.wrappers import GymAutoResetWrapper
@@ -48,7 +48,7 @@ class PlaygroundTimestepWrapper(TimestepWrapper):
   def reset(self, key: jax.random.PRNGKey, params=None):
     timestep = self._env.reset(key=key, params=params)
     resized_obs = jax.image.resize(
-      timestep.observation, shape=(128, 128, 3), method="bilinear"
+      timestep.observation, shape=(256, 256, 3), method="bilinear"
     ).astype(jnp.uint8)
     return timestep.replace(observation=resized_obs)
 
@@ -57,7 +57,7 @@ class PlaygroundTimestepWrapper(TimestepWrapper):
       state = state.state
     timestep = self._env.step(params=params, timestep=state, action=action)
     resized_obs = jax.image.resize(
-      timestep.observation, shape=(128, 128, 3), method="bilinear"
+      timestep.observation, shape=(256, 256, 3), method="bilinear"
     ).astype(jnp.uint8)
     return timestep.replace(observation=resized_obs)
 
@@ -139,44 +139,37 @@ def create_env_with_ruleset(ruleset_key):
   env_params = env_params.replace(
     ruleset=rule,
     max_steps=50,
+    view_size=11,
   )
   env = GymAutoResetWrapper(env)
   env = RGBImgObservationWrapper(env)
-  return env, env_params, rule_text
+  return env, benchmark, env_params, rule_text
 
 
-num_envs = 1
+num_envs = 5
 
 # Create 5 different environments
-envs_and_params_and_ruletext = [create_env_with_ruleset(i) for i in range(num_envs)]
-
-
-
-
-# Create JaxWebEnv for each environment
-jax_web_envs = []
-for env, env_params, rule_text in envs_and_params_and_ruletext:
-  jax_env = PlaygroundTimestepWrapper(env, autoreset=True, use_params=True)
-  jax_web_env = JaxWebEnv(
-    env=jax_env,
-    actions=actions,
-  )
-  jax_web_env.precompile(dummy_env_params=env_params)
-  jax_web_envs.append((jax_web_env, env_params))
+env, benchmark, env_params, rule_text = create_env_with_ruleset(0)
+jax_env = PlaygroundTimestepWrapper(env, autoreset=True, use_params=True)
+jax_web_env = JaxWebEnv(
+  env=jax_env,
+  actions=actions,
+)
+jax_web_env.precompile(dummy_env_params=env_params)
 
 
 def render_fn(timestep: nicewebrl.TimeStep):
   return timestep.observation.astype(jnp.uint8)
-
-
 render_fn = jax.jit(render_fn)
 
+vmap_render_fn = jax_web_env.precompile_vmap_render_fn(render_fn, env_params)
+
+
 ########################################
-# Define Stages of experiment
+# Define Instruction Stage
 ########################################
 
 all_stages = []
-
 
 async def instruction_display_fn(stage, container):
   with container.style("align-items: center;"):
@@ -191,10 +184,11 @@ async def instruction_display_fn(stage, container):
       - t to transform an object"""
     )
 
-
 instruction_stage = Stage(name="Instructions", display_fn=instruction_display_fn)
-all_stages.append(instruction_stage)
 
+########################################
+# Define Environment Stages
+########################################
 
 def make_image_html(src):
   html = f"""
@@ -212,7 +206,9 @@ async def env_stage_display_fn(
   new_obs_base64 = base64_npimage(rendered_img)
 
   stage_state = stage.get_user_data("stage_state")
-  rule_text = stage.metadata.get("rule_text", "No rule text provided.")
+  rule = benchmark.sample_ruleset(nicewebrl.new_rng())
+  current_rule_text = describe_ruleset(rule)
+  stage.set_user_data(rule_text=current_rule_text)
 
   with container.style("align-items: center;"):
     nicewebrl.clear_element(container)
@@ -225,7 +221,7 @@ async def env_stage_display_fn(
         ui.label().bind_text_from(
           stage_state, "nepisodes", lambda n: f"Try: {n}/{stage.max_episodes}"
         )
-    ui.markdown(f"**Goal:** {rule_text}")
+    ui.markdown("You have  50 steps to figure out and complete the task. You can ask the AI for help.")
     ui.html(make_image_html(src=new_obs_base64))
 
 
@@ -234,10 +230,10 @@ def evaluate_success_fn(timestep: TimeStep, params: Optional[object] = None):
 
 
 # Create 5 different stages
-for i, (jax_web_env, env_params) in enumerate(jax_web_envs):
+env_stages = []
+for i in range(num_envs):
   # Get the rule_text for the current environment
   # envs_and_params_and_ruletext is a list of (env, env_params, rule_text)
-  current_rule_text = envs_and_params_and_ruletext[i][2]
 
   environment_stage = EnvStage(
     name=f"Environment {i + 1}",
@@ -246,7 +242,7 @@ for i, (jax_web_env, env_params) in enumerate(jax_web_envs):
     action_to_name=action_to_name,
     env_params=env_params,
     render_fn=render_fn,
-    vmap_render_fn=jax_web_env.precompile_vmap_render_fn(render_fn, env_params),
+    vmap_render_fn=vmap_render_fn,
     display_fn=env_stage_display_fn,
     evaluate_success_fn=evaluate_success_fn,
     min_success=MIN_SUCCESS_EPISODES,
@@ -256,11 +252,61 @@ for i, (jax_web_env, env_params) in enumerate(jax_web_envs):
     metadata=dict(
       desc=f"XLand environment {i + 1}",
       stage_number=i + 1,
-      rule_text=current_rule_text,
     ),
   )
-  all_stages.append(environment_stage)
+  env_stages.append(environment_stage)
 
+########################################
+# Define Feedback Stage
+########################################
+
+async def feedback_display_fn(stage, container):
+  with container.style("align-items: center;"):
+    nicewebrl.clear_element(container)
+    ui.markdown(f"## {stage.name}")
+    ui.markdown("Please answer the following questions:")
+
+    questions = [
+      "How helpful was the AI?",
+      "How human-like was the AI?",
+    ]
+
+    answers = {}
+    completed_all = asyncio.Event()
+
+    # record answer and see if finished
+    def recoder_answer(question, answer):
+      answers[question] = answer
+      if all((i is not None for i in answers.values())):
+        completed_all.set()
+
+    # make handler factory for each question
+    def make_handler(question):
+      return lambda e: recoder_answer(question, e.value)
+
+    # make radio buttons for each question
+    for i, q in enumerate(questions):
+      with ui.row():
+        ui.label(q)
+        ui.radio(
+          [1, 2, 3, 4, 5], on_change=make_handler(q)
+          ).props('inline')
+        answers[q] = None
+    await completed_all.wait()
+
+feedback_stage = FeedbackStage(
+  name="Feedback",
+  display_fn=feedback_display_fn,
+)
+
+
+########################################
+# Define Experiment
+########################################
+all_stages = [
+  instruction_stage,
+  *env_stages,
+  feedback_stage]
 experiment = nicewebrl.SimpleExperiment(
   stages=all_stages,
   randomize=[False] + [True] * (len(all_stages) - 1),

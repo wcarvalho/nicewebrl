@@ -19,6 +19,7 @@ from nicewebrl.utils import get_user_lock
 from nicewebrl.utils import prevent_default_spacebar_behavior
 from nicewebrl.utils import user_data_file
 from nicewebrl.utils import user_metadata_file
+from nicewebrl.utils import save_metadata
 
 from nicewebrl.nicejax import get_rng
 from nicewebrl.nicejax import new_rng
