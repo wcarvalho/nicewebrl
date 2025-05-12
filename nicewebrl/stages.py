@@ -1,6 +1,6 @@
 from typing import List, Any, Callable, Dict, Optional, Union
 from functools import partial
-
+import uuid
 import asyncio
 from asyncio import Lock
 import aiofiles
@@ -21,6 +21,7 @@ from nicewebrl.logging import get_logger
 from nicewebrl.utils import retry_with_exponential_backoff
 from nicewebrl.utils import write_msgpack_record
 from nicewebrl.nicejax import JaxWebEnv
+from nicewebrl.container import Container
 
 
 FeedbackFn = Callable[[struct.PyTreeNode], Dict]
@@ -53,7 +54,7 @@ class StageStateModel(models.Model):
   id = fields.IntField(primary_key=True)
   name = fields.CharField(max_length=255, index=True)
   session_id = fields.CharField(max_length=255, index=True)
-  stage_idx = fields.IntField(index=True)
+  # stage_idx = fields.IntField(index=True)
   data = fields.BinaryField()
 
   class Meta:
@@ -76,7 +77,7 @@ async def get_latest_stage_state(
     await StageStateModel.filter(
       session_id=app.storage.browser["id"],
       name=name,
-      stage_idx=app.storage.user["stage_idx"],
+      # stage_idx=app.storage.user["stage_idx"],
     )
     .order_by("-id")
     .first()
@@ -141,7 +142,7 @@ async def save_stage_state(
 ):
   model = StageStateModel(
     session_id=app.storage.browser["id"],
-    stage_idx=app.storage.user["stage_idx"],
+    # stage_idx=app.storage.user["stage_idx"],
     name=stage_state.name,
     data=serialization.to_bytes(stage_state),
   )
@@ -293,7 +294,9 @@ class EnvStage(Stage):
   msg_display_time: int = None
   user_save_file_fn: Optional[Callable[[], str]] = None
   autoreset_on_done: bool = False
+  ignore_missing_data: bool = True
   verbosity: int = 0
+  preprocess_timestep: Optional[Callable[[TimeStep], TimeStep]] = lambda t: t
   precompile: bool = True
 
   def __post_init__(self):
@@ -359,17 +362,18 @@ class EnvStage(Stage):
       attempt += 1
       try:
         # Set the timestamp in the browser
-        await ui.run_javascript("window.imageSeenTime = new Date();", timeout=2)
+        await ui.run_javascript("window.imageSeenTime = new Date();", timeout=10)
         # If successful, we can return immediately
         return
       except Exception as e:
         if attempt % 10 == 0:  # Log every 10 attempts
           logger.warning(
-            f"{self.name}: Error getting imageSeenTime (attempt {attempt}): {e}"
+            f"'{self.name}': Error getting imageSeenTime (attempt {attempt}): {e}"
           )
         await asyncio.sleep(0.1)  # Short delay between attempts
-        if attempt > 100:
-          ui.notify("Please refresh the page", type="negative")
+        if attempt >= 10:
+          with container:
+            ui.notify("Please refresh the page", type="negative")
           return
 
   async def step_and_send_timestep(self, container, update_display: bool = True):
@@ -439,7 +443,7 @@ class EnvStage(Stage):
     )
 
     if loaded_stage_state is None:
-      logger.info("No stage state found, starting new stage")
+      logger.info(f"No stage {self.name} state found, starting new stage")
       # await self.start_stage(container, new_stage_state)
       await self.set_user_data(stage_state=new_stage_state)
       asyncio.create_task(save_stage_state(new_stage_state))
@@ -449,10 +453,8 @@ class EnvStage(Stage):
       await self.step_and_send_timestep(container)
 
     else:
-      logger.info("Loading stage state from memory")
-      # await self.load_stage(container, loaded_stage_state)
+      logger.info(f"Loading stage {self.name} state from memory")
       await self.set_user_data(stage_state=loaded_stage_state)
-      await self.wait_for_start(container)
       await self.step_and_send_timestep(container)
 
     await self.set_user_data(started=True)
@@ -519,19 +521,22 @@ class EnvStage(Stage):
       if imageSeenTime is not None and keydownTime is not None:
         stage_state = self.get_user_data("stage_state")
         if self.verbosity:
-          logger.info(f"{name} saved file")
+          logger.info(f"'{name}' saved file")
           logger.info(f"∆t: {time_diff(imageSeenTime, keydownTime) / 1000.0}")
           logger.info(f"stage state: {self.user_stats()}")
           logger.info(f"env step: {stage_state.nsteps}")
 
       else:
-        logger.error(f"{name} saved file")
-        logger.error(f"stage state: {self.user_stats()}")
-        logger.error(f"imageSeenTime={imageSeenTime}, keydownTime={keydownTime}")
-        ui.notification("Error: Stage unexpectedly ending early", type="negative")
-        await self.set_user_data(finished=True, final_save=True)
+        if not self.ignore_missing_data:
+          logger.error(f"'{name}' saved file")
+          logger.error(f"stage state: {self.user_stats()}")
+          logger.error(f"imageSeenTime={imageSeenTime}, keydownTime={keydownTime}")
+          await self.set_user_data(finished=True, final_save=True)
+          logger.info("Stage finished due to missing data")
 
     await self.set_user_data(saved_data=True)
+    if self.verbosity:
+      logger.info("finished saving")
 
   @retry_with_exponential_backoff(max_retries=5, base_delay=1, max_delay=10)
   async def finish_stage(self):
@@ -546,7 +551,6 @@ class EnvStage(Stage):
     # save experiment data so far (prior time-step + resultant action)
     # if finished, save synchronously (to avoid race condition) with next stage
     await self.set_user_data(finished=True, final_save=True)
-    logger.info(f"finish_stage {self.name}. stats: {self.user_stats()}")
     imageSeenTime = await ui.run_javascript("getImageSeenTime()", timeout=10)
 
     start_notification = self.pop_user_data("start_notification")
@@ -566,24 +570,27 @@ class EnvStage(Stage):
       timestep=stage_state.timestep,
       user_stats=self.user_stats(),
     )
+    logger.info(f"finished stage '{self.name}'. stats: {self.user_stats()}")
 
   async def handle_key_press(self, event, container):
     # Get or create lock for this specific user
-    async with self.get_user_lock():
-      await self._handle_key_press(event, container)
+    #async with self.get_user_lock():
+    #  await self._handle_key_press(event, container)
 
-  async def _handle_key_press(self, event, container):
+    #async def _handle_key_press(self, event, container):
     key = event.args["key"]
-    logger.info(f"handle_key_press key: {key}")
+    if self.verbosity:
+      logger.info(f"handle_key_press key: {key}")
     if not self.get_user_data("started", False):
-      logger.info(f"key press '{key}' before started")
+      if self.verbosity:
+        logger.info(f"pressed '{key}' before started")
       return
     if self.get_user_data("stage_finished", False):
       # if already did final save, just return
       if self.get_user_data("final_save", False):
-        logger.info(f"key press '{key}' after final save")
+        if self.verbosity:
+          logger.info(f"pressed '{key}' after final save")
         return
-      logger.info(f"key press '{key}' finishing stage")
 
       # did not do final save, so do so now
       # want stage to end on keypress so that
@@ -596,11 +603,13 @@ class EnvStage(Stage):
       success_notification = self.pop_user_data("success_notification")
       if success_notification:
         success_notification.dismiss()
+      logger.info("finishing handle key press")
       return
 
     # check if valid environment interaction
     if key not in self.key_to_action:
-      logger.info(f"key press '{key}' not in key_to_action")
+      if self.verbosity:
+        logger.info(f"key press '{key}' not in key_to_action")
       return
 
     #############################
@@ -611,7 +620,9 @@ class EnvStage(Stage):
     # save prior timestep + current event information
     user_stats = self.user_stats()
     timestep = self.get_user_data("stage_state").timestep
-    await self.get_user_queue().put((event.args, timestep, user_stats))
+    processed_timestep = self.preprocess_timestep(timestep)
+    async with self.get_user_lock():
+      await self.get_user_queue().put((event.args, processed_timestep, user_stats))
     asyncio.create_task(self._process_save_queue())
 
     #############################
@@ -620,9 +631,7 @@ class EnvStage(Stage):
     if self.autoreset_on_done:
       if timestep.last():
         rng = new_rng()
-        logger.info("Resetting environment")
         timestep = self.web_env.reset(rng, self.env_params)
-        logger.info("finished resetting environment")
       else:
         action_idx = self.key_to_action[key]
         next_timesteps = self.get_user_data("next_timesteps")
@@ -741,10 +750,102 @@ class EnvStage(Stage):
 
 
 @dataclasses.dataclass
-class Block:
-  stages: List[Stage]
+class Block(Container):
+  stages: List[Stage] = dataclasses.field(default_factory=list)
   randomize: Union[bool, List[bool]] = False
   metadata: Dict[str, Any] = dataclasses.field(default_factory=dict)
+  name: str = None
+
+  def __len__(self):
+    return len(self.stages)
+
+  def __post_init__(self):
+    self._lock = Lock()  # Add lock for thread safety
+    self._user_locks = {}  # Dictionary to store per-user locks
+    if self.name is None:
+      self.name = f"block_{uuid.uuid4().hex[:8]}"
+
+    # Broadcast metadata
+    self.metadata["name"] = self.name
+    for stage in self.stages:
+      stage.metadata["block_metadata"] = self.metadata
+
+  # def get_block_data(self):
+  #  return app.storage.user.get(f"'{self.name}'_data", {})
+
+  # def get_user_data(self, key, value=None):
+  #  return self.get_block_data().get(key, value)
+
+  # async def set_user_data(self, **kwargs):
+  #  block_data = self.get_block_data()
+  #  block_data.update(kwargs)
+  #  async with self._lock:
+  #    app.storage.user[f"'{self.name}'_data"] = block_data
+
+  async def get_block_stage_idx(self):
+    stage_idx = self.get_user_data("stage_idx")
+    if stage_idx is None:
+      stage_idx = 0
+      await self.set_user_data(stage_idx=stage_idx)
+    return stage_idx
+
+  async def get_user_stage_order(self):
+    """This function prepares the order of stages in the block."""
+    if not self.randomize:
+      return list(range(len(self.stages)))
+    stage_order = self.get_user_data("stage_order")
+    if stage_order is not None:
+      return stage_order
+
+    # self.randomize = randomize = [False, False, False, True, True]
+    indices = jnp.arange(len(self.stages))
+    mask = jnp.array(self.randomize)
+
+    # Get randomizable indices
+    random_indices = indices[mask]
+
+    # Permute the randomizable indices
+    rng_key = new_rng()
+    rng_key, subkey = jax.random.split(rng_key)
+    random_indices = jax.random.permutation(subkey, random_indices)
+
+    # Combine back together
+    permuted = indices.at[mask].set(random_indices)
+
+    stage_order = [int(i) for i in permuted]
+    await self.set_user_data(stage_order=stage_order)
+    return stage_order
+
+  async def get_stage(self):
+    stage_idx = await self.get_block_stage_idx()
+    stage_order = await self.get_user_stage_order()
+    if stage_idx >= len(stage_order):
+      logger.info("Defaulting to final stage")
+      stage_idx = len(stage_order) - 1
+    stage = self.stages[stage_order[stage_idx]]
+    app.storage.user["stage_name"] = stage.name
+    return stage
+
+  async def advance_stage(self):
+    stage_idx = await self.get_block_stage_idx()
+    await self.set_user_data(stage_idx=stage_idx + 1)
+
+  async def not_finished(self):
+    stage_idx = await self.get_block_stage_idx()
+    return stage_idx < len(self.stages)
+
+
+def broadcast_metadata(blocks: List[Block]) -> List[Stage]:
+  """This function assigns the block metadata to each stage."""
+  # assign block description to each stage description
+  for block_idx, block in enumerate(blocks):
+    for stage in block.stages:
+      block.metadata.update(idx=block_idx)
+      stage.metadata["block_metadata"] = block.metadata
+
+
+def nstages(blocks: List[Block]) -> int:
+  return sum(len(block.stages) for block in blocks)
 
 
 def prepare_blocks(blocks: List[Block]) -> List[Stage]:
@@ -752,13 +853,13 @@ def prepare_blocks(blocks: List[Block]) -> List[Stage]:
   It also flattens all blocks into a single list of stages.
   """
   # assign block description to each stage description
+  all_stages = []
   for block_idx, block in enumerate(blocks):
     for stage in block.stages:
       block.metadata.update(idx=block_idx)
       stage.metadata["block_metadata"] = block.metadata
-
-  # flatten all blocks
-  return [stage for block in blocks for stage in block.stages]
+      all_stages.append(stage)
+  return all_stages
 
 
 def generate_stage_order(

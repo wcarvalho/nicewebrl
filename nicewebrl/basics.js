@@ -1,5 +1,10 @@
 async function isFullscreen() {
-  return document.fullscreenElement != null;
+  try {
+    return document.fullscreenElement != null;
+  } catch (error) {
+    console.warn('Fullscreen check failed:', error);
+    return false;  // Return a safe default
+  }
 } 
 
 async function getImageSeenTime() {
@@ -27,6 +32,14 @@ async function pingServer() {
     }
   }
 }
+
+// Function to toggle spacebar behavior
+let spacebarPrevented = false; // Default to preventing spacebar
+function preventDefaultSpacebarBehavior(shouldPrevent) {
+  spacebarPrevented = shouldPrevent;
+  return spacebarPrevented;
+}
+
 document.addEventListener('DOMContentLoaded', async function () {
 
   ////////////////
@@ -41,6 +54,18 @@ document.addEventListener('DOMContentLoaded', async function () {
   window.require_fullscreen = false;
   window.accept_keys = false;
   window.next_states = null;
+
+  ////////////////
+  // Prevent spacebar from toggling fullscreen
+  ////////////////
+  document.addEventListener('keydown', function(event) {
+    // Check if the key pressed is spacebar
+    if ((event.key === " " || event.code === "Space") && spacebarPrevented) {
+      // Prevent the default action (toggling fullscreen)
+      event.preventDefault();
+      console.log('prevented spacebar');
+    }
+  }, true); // Using capturing phase to catch the event before other handlers
 
   ////////////////
   // how to handle key presses?
