@@ -59,6 +59,7 @@ class StageStateModel(models.Model):
   class Meta:
     table = "stage"
 
+
 class EnvStageState(struct.PyTreeNode):
   timestep: struct.PyTreeNode
   nsteps: jax.Array = jnp.array(1, dtype=jnp.int32)
@@ -66,7 +67,10 @@ class EnvStageState(struct.PyTreeNode):
   nsuccesses: jax.Array = jnp.array(0, dtype=jnp.int32)
   name: str = "stage"
 
-async def get_latest_stage_state(example: struct.PyTreeNode, name: str) -> StageStateModel | None:
+
+async def get_latest_stage_state(
+  example: struct.PyTreeNode, name: str
+) -> StageStateModel | None:
   logger.info("Getting latest stage state")
   latest = (
     await StageStateModel.filter(
@@ -148,7 +152,6 @@ async def save_stage_state(
     max_delay=max_delay,
     synchronous=True,
   )
-
 
 
 @dataclasses.dataclass
@@ -433,7 +436,7 @@ class EnvStage(Stage):
     loaded_stage_state = await get_latest_stage_state(
       example=new_stage_state,
       name=self.name,
-      )
+    )
 
     if loaded_stage_state is None:
       logger.info("No stage state found, starting new stage")
@@ -475,7 +478,7 @@ class EnvStage(Stage):
     timestep_data = {}
     if self.custom_data_fn is not None:
       timestep_data = self.custom_data_fn(timestep)
-      timestep_data = jax.tree_map(make_serializable, timestep_data)
+      timestep_data = jax.tree.map(make_serializable, timestep_data)
 
     serialized_timestep = serialization.to_bytes(timestep)
 
@@ -623,12 +626,12 @@ class EnvStage(Stage):
       else:
         action_idx = self.key_to_action[key]
         next_timesteps = self.get_user_data("next_timesteps")
-        timestep = jax.tree_map(lambda t: t[action_idx], next_timesteps)
+        timestep = jax.tree.map(lambda t: t[action_idx], next_timesteps)
     else:
       # use action to select from avaialble next time-steps
       action_idx = self.key_to_action[key]
       next_timesteps = self.get_user_data("next_timesteps")
-      timestep = jax.tree_map(lambda t: t[action_idx], next_timesteps)
+      timestep = jax.tree.map(lambda t: t[action_idx], next_timesteps)
 
     #############################
     # update stage variables
