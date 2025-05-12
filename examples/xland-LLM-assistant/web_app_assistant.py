@@ -10,11 +10,11 @@ import config
 import nicewebrl
 from nicewebrl.logging import setup_logging, get_logger
 from nicewebrl.utils import wait_for_button_or_keypress
-from nicewebrl import stages
+from nicewebrl import stages, TimeStep, EnvParams
 import time
-from google_cloud_utils import save_to_gcs_with_retries, save_file_to_gcs
+from google_cloud_utils import save_to_gcs_with_retries
 
-from experiment_structure import experiment
+from experiment_structure import experiment, describe_ruleset
 import config
 
 
@@ -26,9 +26,54 @@ _user_locks = {}
 # previous_obs_base64 = None
 # current_obs_base64 = None
 
+def get_object_name(object_type: int, object_color: int):
+  object_types = {
+    0: "EMPTY",
+    1: "FLOOR",
+    2: "WALL",
+    3: "BALL",
+    4: "SQUARE",
+    5: "PYRAMID",
+    6: "GOAL",
+    7: "KEY",
+    8: "DOOR_LOCKED",
+    9: "DOOR_CLOSED",
+    10: "DOOR_OPEN",
+    11: "HEX",
+    12: "STAR"
+  }
+  
+  colors = {
+    0: "EMPTY",
+    1: "red",
+    2: "green",
+    3: "blue",
+    4: "purple",
+    5: "yellow",
+    6: "grey",
+    7: "black",
+    8: "orange",
+    9: "white",
+    10: "brown",
+    11: "pink"
+  }
+  
+  # Handle special case for EMPTY object type
+  if object_type == 0:
+    return "EMPTY"
+  
+  # Return the color and object type as a formatted string
+  return f"{colors[object_color]} {object_types[object_type]}"
 
-def convert_state_to_text(state):
-  gamestate = state.state
+def convert_state_to_text(
+  timestep: TimeStep,
+  env_params: EnvParams,
+):
+
+  ruleset = env_params.ruleset
+  rule_description = describe_ruleset(ruleset)
+
+  gamestate = timestep.state
 
   agent_position = gamestate.agent.position.tolist()
   agent_direction = gamestate.agent.direction
@@ -42,54 +87,28 @@ def convert_state_to_text(state):
   elif agent_direction == 3:
     agent_direction = "LEFT"
 
-  cur_reward = state.reward
+  cur_reward = timestep.reward
   cur_grid = gamestate.grid
   cur_grid = cur_grid.tolist()
 
   state_text = f"Agent Position: {agent_position}, Agent Direction: {agent_direction}\n"
   state_text += f"Current Reward: {cur_reward}\n"
-  state_text += """Each point in the grid is represented as a tuple (object_type, color), where:
 
-  - object_type is an integer from the Tiles class:
-      EMPTY = 0
-      FLOOR = 1
-      WALL = 2
-      BALL = 3
-      SQUARE = 4
-      PYRAMID = 5
-      GOAL = 6
-      KEY = 7
-      DOOR_LOCKED = 8
-      DOOR_CLOSED = 9
-      DOOR_OPEN = 10
-      HEX = 11
-      STAR = 12
+  state_text += f"""
+  The current rule description is:
+  {rule_description}
+  "GOAL" describes the goal of the current episode. "RULES" describe how objects can be transformed together this episode. "INIT TILES" describe the initial objects in the environment.
 
-  - color is an integer from the Colors class:
-      EMPTY = 0
-      RED = 1
-      GREEN = 2
-      BLUE = 3
-      PURPLE = 4
-      YELLOW = 5
-      GREY = 6
-      BLACK = 7
-      ORANGE = 8
-      WHITE = 9
-      BROWN = 10
-      PINK = 11
-
-  Examples:
-      (3, 1)  -> red BALL
-      (6, 9)  -> white GOAL
-
-      We now give the current grid state:
+  We now give the current grid state:
   """
+
+  row_text = ""
   for i in range(len(cur_grid)):
     for j in range(len(cur_grid[i])):
       obj_type, color = cur_grid[i][j]
-      state_text += f"({obj_type}, {color}) "
-    state_text += "\n"
+      object_name = get_object_name(obj_type, color)
+      row_text += f"({i}, {j}) -> {object_name.lower()}\n"
+  state_text += row_text + "\n"
   state_text += "\n"
   return state_text
 
@@ -210,12 +229,9 @@ async def send_message(chat_input, response_box):
     env_text = ""
     if isinstance(current_stage, stages.EnvStage):
       timestep = current_stage.get_user_data("stage_state").timestep
-      if timestep is not None:
-        state = timestep.state
-        if state is not None:
-          # with open("env_state.txt", "w") as f:
-          #    pprint.pprint(state, stream=f)
-          env_text = convert_state_to_text(state)
+      env_params = current_stage.env_params
+      if timestep is not None and timestep.state is not None:
+        env_text = convert_state_to_text(timestep, env_params)
 
     # Use the persisted model selection
     model = app.storage.user["selected_model"]
@@ -230,6 +246,7 @@ async def send_message(chat_input, response_box):
     response_box.set_content(f"**Hint:** {response}")
     response_box.update()
   except Exception as e:
+    import ipdb; ipdb.set_trace()
     response_box.set_content(f"**Error:** {str(e)}")
     response_box.update()
   chat_input.set_value("")

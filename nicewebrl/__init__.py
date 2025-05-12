@@ -28,6 +28,7 @@ from nicewebrl.nicejax import deserialize
 from nicewebrl.nicejax import base64_npimage
 from nicewebrl.nicejax import StepType
 from nicewebrl.nicejax import TimeStep
+from nicewebrl.nicejax import EnvParams
 from nicewebrl.nicejax import TimestepWrapper
 from nicewebrl.nicejax import JaxWebEnv
 from nicewebrl.nicejax import get_size

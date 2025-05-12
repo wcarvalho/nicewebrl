@@ -44,6 +44,23 @@ MIN_SUCCESS_EPISODES = 1
 VERBOSITY = 1
 
 
+class PlaygroundTimestepWrapper(TimestepWrapper):
+  def reset(self, key: jax.random.PRNGKey, params=None):
+    timestep = self._env.reset(key=key, params=params)
+    resized_obs = jax.image.resize(
+      timestep.observation, shape=(128, 128, 3), method="bilinear"
+    ).astype(jnp.uint8)
+    return timestep.replace(observation=resized_obs)
+
+  def step(self, key, state, action, params=None):
+    if isinstance(state, TimeStep):
+      state = state.state
+    timestep = self._env.step(params=params, timestep=state, action=action)
+    resized_obs = jax.image.resize(
+      timestep.observation, shape=(128, 128, 3), method="bilinear"
+    ).astype(jnp.uint8)
+    return timestep.replace(observation=resized_obs)
+
 ########################################
 # Define actions and corresponding keys
 ########################################
@@ -65,7 +82,7 @@ action_to_name = ["Forward", "Right", "Left", "Pick Up", "Drop", "Toggle"]
 ########################################
 # Create multiple environments with different rulesets
 ########################################
-def _text_encode_goal(goal: list[int]) -> str:
+def text_encode_goal(goal: list[int]) -> str:
   # copied and edited from: https://github.com/dunnolab/xland-minigrid/blob/main/src/xminigrid/rendering/text_render.py#L140
   goal_id = goal[0]
   if goal_id == 1:
@@ -96,9 +113,9 @@ def _text_encode_goal(goal: list[int]) -> str:
 
 def describe_ruleset(ruleset) -> str:
   str = "GOAL:" + "\n"
-  goal = _text_encode_goal(ruleset.goal.tolist())
+  goal = text_encode_goal(ruleset.goal.tolist())
   goal.split()
-  str += _text_encode_goal(ruleset.goal.tolist()) + "\n"
+  str += text_encode_goal(ruleset.goal.tolist()) + "\n"
   str += "\n"
   str += "RULES:" + "\n"
   for rule in ruleset.rules.tolist():
@@ -134,38 +151,6 @@ num_envs = 1
 envs_and_params_and_ruletext = [create_env_with_ruleset(i) for i in range(num_envs)]
 
 
-class PlaygroundTimestepWrapper(TimestepWrapper):
-  def reset(self, key: jax.random.PRNGKey, params=None):
-    timestep = self._env.reset(key=key, params=params)
-    resized_obs = jax.image.resize(
-      timestep.observation, shape=(128, 128, 3), method="bilinear"
-    ).astype(jnp.uint8)
-    return TimeStep(
-      state=timestep.replace(observation=resized_obs),
-      observation=resized_obs,
-      discount=jnp.ones((), dtype=jnp.float32),
-      reward=jnp.zeros((), dtype=jnp.float32),
-      step_type=jnp.array(0, dtype=jnp.uint8),
-    )
-
-  def step(self, key, state, action, params=None):
-    if isinstance(state, TimeStep):
-      state = state.state
-    timestep = self._env.step(params=params, timestep=state, action=action)
-    resized_obs = jax.image.resize(
-      timestep.observation, shape=(128, 128, 3), method="bilinear"
-    ).astype(jnp.uint8)
-    return TimeStep(
-      state=timestep.replace(observation=resized_obs),
-      observation=resized_obs,
-      discount=jnp.ones((), dtype=jnp.float32),
-      reward=timestep.reward,
-      step_type=jnp.where(
-        timestep.step_type == 2,
-        jnp.array(2, dtype=jnp.uint8),  # LAST
-        jnp.array(1, dtype=jnp.uint8),  # MID
-      ),
-    )
 
 
 # Create JaxWebEnv for each environment
@@ -223,7 +208,6 @@ def make_image_html(src):
 async def env_stage_display_fn(
   stage: EnvStage, container: ui.element, timestep: TimeStep
 ):
-  print("Display function obs shape:", timestep.observation.shape)
   rendered_img = stage.render_fn(timestep)
   new_obs_base64 = base64_npimage(rendered_img)
 

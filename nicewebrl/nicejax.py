@@ -213,6 +213,7 @@ class StepType(jnp.uint8):
   MID: jax.Array = jnp.asarray(1, dtype=jnp.uint8)
   LAST: jax.Array = jnp.asarray(2, dtype=jnp.uint8)
 
+EnvParams = struct.PyTreeNode
 
 class TimeStep(struct.PyTreeNode):
   state: struct.PyTreeNode
