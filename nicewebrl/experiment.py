@@ -13,6 +13,7 @@ from nicewebrl.utils import get_user_lock
 
 logger = get_logger(__name__)
 
+
 @dataclasses.dataclass
 class SimpleExperiment(Container):
   stages: List[Stage] = dataclasses.field(default_factory=list)
@@ -219,5 +220,3 @@ class Experiment(Container):
   def force_finish(self):
     app.storage.user["stage_idx"] = self.num_stages
     app.storage.user["block_idx"] = self.num_blocks
-
-

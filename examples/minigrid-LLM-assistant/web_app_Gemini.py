@@ -304,6 +304,6 @@ async def index(request: Request):
 
 ui.run(
   storage_secret="private key to secure the browser session cookie",
-  reload=False,
+  reload=True,
   title="Minigrid Web App",
 )

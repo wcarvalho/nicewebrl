@@ -577,10 +577,10 @@ class EnvStage(Stage):
 
   async def handle_key_press(self, event, container):
     # Get or create lock for this specific user
-    #async with self.get_user_lock():
+    # async with self.get_user_lock():
     #  await self._handle_key_press(event, container)
 
-    #async def _handle_key_press(self, event, container):
+    # async def _handle_key_press(self, event, container):
     key = event.args["key"]
     if self.verbosity:
       logger.info(f"handle_key_press key: {key}")

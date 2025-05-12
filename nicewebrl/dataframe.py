@@ -110,10 +110,10 @@ class DataFrame(object):
     """
     new_rows = []
     new_episodes = []
-    
+
     # Define schema explicitly based on the original dataframe
     schema = {col: self._df[col].dtype for col in self._df.columns}
-    
+
     for idx, row in enumerate(self._df.iter_rows(named=True)):
       if not episode_filter(self.episodes[idx]):
         new_rows.append(row)

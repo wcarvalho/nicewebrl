@@ -480,6 +480,6 @@ ui.run(
   host="0.0.0.0",
   port=8080,
   # reload='FLY_ALLOC_ID' not in os.environ,
-  reload=False,
+  reload=True,
   title="XLand-MiniGrid Web App",
 )

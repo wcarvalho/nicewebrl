@@ -26,6 +26,7 @@ _user_locks = {}
 # previous_obs_base64 = None
 # current_obs_base64 = None
 
+
 def convert_state_to_text(state):
   gamestate = state.state
 
@@ -45,9 +46,7 @@ def convert_state_to_text(state):
   cur_grid = gamestate.grid
   cur_grid = cur_grid.tolist()
 
-  state_text = (
-    f"Agent Position: {agent_position}, Agent Direction: {agent_direction}\n"
-  )
+  state_text = f"Agent Position: {agent_position}, Agent Direction: {agent_direction}\n"
   state_text += f"Current Reward: {cur_reward}\n"
   state_text += """Each point in the grid is represented as a tuple (object_type, color), where:
 
@@ -127,6 +126,7 @@ async def get_gemini_response(message, env_text):
     res.raise_for_status()
     return res.json()["candidates"][0]["content"]["parts"][0]["text"]
 
+
 async def get_claude_response(message, env_text):
   url = config.CLAUDE_API_URL
   headers = {
@@ -162,6 +162,7 @@ async def get_claude_response(message, env_text):
     res = await client.post(url, headers=headers, json=data)
     res.raise_for_status()
     return res.json()["content"][0]["text"]
+
 
 async def get_chatgpt_response(message, env_text):
   url = config.CHATGPT_API_URL
@@ -200,6 +201,7 @@ async def get_chatgpt_response(message, env_text):
     res = await client.post(url, headers=headers, json=data)
     res.raise_for_status()
     return res.json()["choices"][0]["message"]["content"]
+
 
 async def send_message(chat_input, response_box):
   message = chat_input.value
@@ -283,6 +285,7 @@ app.on_shutdown(close_db)
 # Consent Form and demographic info
 #####################################
 
+
 async def make_consent_form(container):
   consent_given = asyncio.Event()
   with container:
@@ -290,9 +293,11 @@ async def make_consent_form(container):
     with open("consent.md", "r") as consent_file:
       consent_text = consent_file.read()
     ui.markdown(consent_text)
+
     def on_change():
       print("on_change")
       consent_given.set()
+
     ui.checkbox("I agree to participate.", on_change=on_change)
   print("waiting for consent")
   await consent_given.wait()
@@ -333,7 +338,6 @@ async def collect_demographic_info(container):
 
 
 async def start_experiment(meta_container, stage_container, llm_container):
-
   # ========================================
   # Consent form and demographic info
   # ========================================
@@ -345,7 +349,7 @@ async def start_experiment(meta_container, stage_container, llm_container):
   # ========================================
   # Force fullscreen
   # ========================================
-  #ui.run_javascript("window.require_fullscreen = true")
+  # ui.run_javascript("window.require_fullscreen = true")
 
   # ========================================
   # Register global key press handler
@@ -357,9 +361,11 @@ async def start_experiment(meta_container, stage_container, llm_container):
   # ========================================
   with llm_container:
     ui.markdown("## 💬 Chat with AI Assistant")
-    chat_input = ui.input(placeholder="Ask for hints or clues...").style(
-      "width: 100%; margin-bottom: 10px;"
-    ).props('id=chat-input')
+    chat_input = (
+      ui.input(placeholder="Ask for hints or clues...")
+      .style("width: 100%; margin-bottom: 10px;")
+      .props("id=chat-input")
+    )
     send_button = ui.button("Send")
     response_box = ui.markdown("Waiting for your question...").style(
       "margin-top: 10px;"
@@ -459,11 +465,11 @@ async def finish_experiment(container):
     ui.markdown("### 'carvalho.assistants'")
     ui.markdown("#### You may close the browser")
 
+
 async def save_data(feedback=None, **kwargs):
   global experiment_structure, config
   user_data_file = nicewebrl.user_data_file()
   user_metadata_file = nicewebrl.user_metadata_file()
-
 
   # --------------------------------
   # save user data to final line of file
@@ -487,6 +493,7 @@ async def save_data(feedback=None, **kwargs):
 
   # Try to delete local files after successful upload
   from nicewebrl.stages import StageStateModel
+
   logger.info(f"Deleting data for user {app.storage.browser['id']}")
   await StageStateModel.filter(session_id=app.storage.browser["id"]).delete()
   logger.info(
@@ -545,7 +552,6 @@ async def check_if_over(container, episode_limit=60):
 
 @ui.page("/")
 async def index(request: Request):
-
   nicewebrl.initialize_user(request=request)
   await experiment.initialize()
 
@@ -578,7 +584,9 @@ async def index(request: Request):
     meta_container = ui.row()
     with meta_container.style("align-items: center;"):
       stage_container = ui.column()
-      llm_container = ui.column().style("flex: 1; padding: 16px; background-color: #f5f5f5;")
+      llm_container = ui.column().style(
+        "flex: 1; padding: 16px; background-color: #f5f5f5;"
+      )
       ui.timer(
         interval=10,
         callback=lambda: check_if_over(episode_limit=200, container=stage_container),

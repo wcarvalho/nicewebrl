@@ -15,7 +15,10 @@ logger = get_logger(__name__)
 
 GOOGLE_CREDENTIALS = "./google-cloud-key.json"
 if not os.path.exists(GOOGLE_CREDENTIALS):
-  raise FileNotFoundError(f"Google Cloud credentials file {GOOGLE_CREDENTIALS} not found")
+  raise FileNotFoundError(
+    f"Google Cloud credentials file {GOOGLE_CREDENTIALS} not found"
+  )
+
 
 def initialize_storage_client(bucket_name: str):
   storage_client = storage.Client.from_service_account_json(GOOGLE_CREDENTIALS)
@@ -82,7 +85,7 @@ async def save_file_to_gcs(local_filename, blob_filename, bucket_name: str):
 
 
 async def save_to_gcs_with_retries(
-  files_to_save, max_retries=5, retry_delay=5, bucket_name: str = ''
+  files_to_save, max_retries=5, retry_delay=5, bucket_name: str = ""
 ):
   """Save multiple files to Google Cloud Storage with retry logic.
 
@@ -94,7 +97,7 @@ async def save_to_gcs_with_retries(
   Returns:
       bool: True if all files were saved successfully, False otherwise
   """
-  assert bucket_name != '', "Bucket name is required"
+  assert bucket_name != "", "Bucket name is required"
   for attempt in range(max_retries):
     try:
       # Try to save all files
@@ -115,5 +118,3 @@ async def save_to_gcs_with_retries(
       else:
         logger.info(f"Failed to save to GCS after {max_retries} attempts: {e}")
         return False
-
-

@@ -14,9 +14,11 @@ import random
 from datetime import datetime
 import struct
 from fastapi import Request
+
 logger = get_logger(__name__)
 
 _user_locks = {}
+
 
 def get_user_lock():
   user_seed = app.storage.user["seed"]
@@ -47,7 +49,7 @@ async def toggle_fullscreen():
 async def prevent_default_spacebar_behavior(should_prevent: bool):
   """
   Set whether the spacebar's default behavior (fullscreen toggle) is prevented.
-  
+
   Args:
       should_prevent (bool): Whether to prevent the spacebar's default behavior.
   """
@@ -219,19 +221,26 @@ def initialize_user(*, seed: int = 0, request: Request = None):
   ############################################################
   def print_ping(e):
     logger.info(str(e.args))
+
   ui.on("ping", print_ping)
+
 
 def user_data_file():
   return f"user_data_{app.storage.user['seed']}.msgpack"
 
+
 def user_metadata_file():
   return f"user_data_{app.storage.user['seed']}.json"
 
+
 def save_metadata(metadata: Dict, filepath: str = None):
   filepath = user_data_file()
-  import pdb; pdb.set_trace()
+  import pdb
+
+  pdb.set_trace()
   with open(filepath, "a") as f:
     f.write(json.dumps(metadata))
+
 
 def get_user_session_minutes():
   start_time = datetime.fromisoformat(app.storage.user["session_start"])
@@ -240,6 +249,7 @@ def get_user_session_minutes():
   minutes_passed = duration.total_seconds() / 60
   app.storage.user["session_duration"] = minutes_passed
   return minutes_passed
+
 
 def broadcast_message(event: str, message: str):
   called_by_user_id = str(app.storage.user["seed"])
@@ -250,6 +260,7 @@ def broadcast_message(event: str, message: str):
   for client in Client.instances.values():
     with client:
       ui.run_javascript(fn)
+
 
 async def write_msgpack_record(f, data):
   """Write a length-prefixed msgpack record to a file.

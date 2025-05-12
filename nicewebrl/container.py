@@ -4,6 +4,7 @@ from nicegui import app, ui
 import uuid
 from nicewebrl.utils import get_user_lock
 
+
 @dataclasses.dataclass
 class Container:
   name: str = None

@@ -12,6 +12,8 @@ import xminigrid
 from xminigrid.wrappers import GymAutoResetWrapper
 from xminigrid.experimental.img_obs import RGBImgObservationWrapper
 from xminigrid.types import RuleSet
+from xminigrid.rendering.text_render import _text_encode_rule, _encode_tile
+
 from xminigrid.benchmarks import (
   Benchmark,
   load_benchmark,
@@ -59,85 +61,68 @@ actions = jnp.array([0, 1, 2, 3, 4, 5])
 action_keys = ["ArrowUp", "ArrowRight", "ArrowLeft", "p", "d", "t"]  # Mapping to keys
 action_to_name = ["Forward", "Right", "Left", "Pick Up", "Drop", "Toggle"]
 
+
 ########################################
 # Create multiple environments with different rulesets
 ########################################
+def _text_encode_goal(goal: list[int]) -> str:
+  # copied and edited from: https://github.com/dunnolab/xland-minigrid/blob/main/src/xminigrid/rendering/text_render.py#L140
+  goal_id = goal[0]
+  if goal_id == 1:
+    return f"Agent_Hold({_encode_tile(goal[1:3])})"
+  elif goal_id == 3:
+    return f"Agent_Near({_encode_tile(goal[1:3])})"
+  elif goal_id == 4:
+    return f"Tile_Near({_encode_tile(goal[1:3])}, {_encode_tile(goal[3:5])})"
+  elif goal_id == 7:
+    return f"Tile_Near_Up_Goal({_encode_tile(goal[1:3])}, {_encode_tile(goal[3:5])})"
+  elif goal_id == 8:
+    return f"Tile_Near_Right_Goal({_encode_tile(goal[1:3])}, {_encode_tile(goal[3:5])})"
+  elif goal_id == 9:
+    return f"Tile_Near_Down_Goal({_encode_tile(goal[1:3])}, {_encode_tile(goal[3:5])})"
+  elif goal_id == 10:
+    return f"Tile_Near_Left_Goal({_encode_tile(goal[1:3])}, {_encode_tile(goal[3:5])})"
+  elif goal_id == 11:
+    return f"Agent_Near_Up_Goal({_encode_tile(goal[1:3])})"
+  elif goal_id == 12:
+    return f"Agent_Near_Right_Goal({_encode_tile(goal[1:3])})"
+  elif goal_id == 13:
+    return f"Agent_Near_Down_Goal({_encode_tile(goal[1:3])})"
+  elif goal_id == 14:
+    return f"Agent_Near_Left_Goal({_encode_tile(goal[1:3])})"
+  else:
+    raise RuntimeError(f"Rendering: Unknown goal id: {goal_id}")
 
 
-def describe_goal(encoding):
-  # Convert JAX arrays to Python integers
-  goal_type = int(encoding[0])
-  obj1_type, obj1_color = int(encoding[1]), int(encoding[2])
-  obj2_type, obj2_color = int(encoding[3]), int(encoding[4])
+def describe_ruleset(ruleset) -> str:
+  str = "GOAL:" + "\n"
+  goal = _text_encode_goal(ruleset.goal.tolist())
+  goal.split()
+  str += _text_encode_goal(ruleset.goal.tolist()) + "\n"
+  str += "\n"
+  str += "RULES:" + "\n"
+  for rule in ruleset.rules.tolist():
+    if rule[0] != 0:
+      str += _text_encode_rule(rule) + "\n"
+  str += "\n"
+  str += "INIT TILES:" + "\n"
+  for tile in ruleset.init_tiles.tolist():
+    if tile[0] != 0:
+      str += _encode_tile(tile) + "\n"
 
-  # Define mappings from integers to human-readable strings
-  tile_names = {
-    0: "empty space",
-    1: "floor",
-    2: "wall",
-    3: "ball",
-    4: "square",
-    5: "pyramid",
-    6: "goal",
-    7: "key",
-    8: "locked door",
-    9: "closed door",
-    10: "open door",
-    11: "hex",
-    12: "star",
-  }
-
-  color_names = {
-    0: "",
-    1: "red",
-    2: "green",
-    3: "blue",
-    4: "purple",
-    5: "yellow",
-    6: "grey",
-    7: "black",
-    8: "orange",
-    9: "white",
-    10: "brown",
-    11: "pink",
-  }
-
-  def describe_object(tile_type, color):
-    name = tile_names.get(tile_type, "unknown")
-    color_name = color_names.get(color, "")
-    return f"{color_name} {name}".strip()
-
-  obj1_desc = describe_object(obj1_type, obj1_color)
-  obj2_desc = describe_object(obj2_type, obj2_color)
-
-  # Define natural language descriptions for different goal types
-  goal_descriptions = {
-    0: "no goal (padding)",
-    1: f"have the agent hold the {obj1_desc}",
-    2: f"move the agent onto the {obj1_desc}",
-    3: f"move the agent near the {obj1_desc}",
-    4: f"move the {obj1_desc} near the {obj2_desc}",
-    5: f"move the {obj1_desc} onto position of the {obj2_desc}",
-    6: f"move the agent to the position of the {obj1_desc}",
-    7: f"move the {obj1_desc} above the {obj2_desc}",
-    8: f"move the {obj1_desc} to the right of the {obj2_desc}",
-    9: f"move the {obj1_desc} below the {obj2_desc}",
-    10: f"move the {obj1_desc} to the left of the {obj2_desc}",
-    11: f"move the agent above the {obj1_desc}",
-    12: f"move the agent to the right of the {obj1_desc}",
-    13: f"move the agent below the {obj1_desc}",
-    14: f"move the agent to the left of the {obj1_desc}",
-  }
-
-  return goal_descriptions.get(goal_type, "Unknown goal")
+  return str
 
 
 def create_env_with_ruleset(ruleset_key):
   env, env_params = xminigrid.make("XLand-MiniGrid-R1-9x9")
   benchmark = xminigrid.load_benchmark(name="medium-1m")
   rule = benchmark.sample_ruleset(jax.random.key(ruleset_key))
-  rule_text = describe_goal(rule.goal)
-  env_params = env_params.replace(ruleset=rule)
+  rule_text = describe_ruleset(rule)
+
+  env_params = env_params.replace(
+    ruleset=rule,
+    max_steps=50,
+  )
   env = GymAutoResetWrapper(env)
   env = RGBImgObservationWrapper(env)
   return env, env_params, rule_text
@@ -295,4 +280,4 @@ for i, (jax_web_env, env_params) in enumerate(jax_web_envs):
 experiment = nicewebrl.SimpleExperiment(
   stages=all_stages,
   randomize=[False] + [True] * (len(all_stages) - 1),
-  )
+)
