@@ -13,14 +13,13 @@ RUN apt-get update && apt-get install -y \
 # Create non-root user
 RUN useradd -m -u 1000 appuser
 
-# Copy requirements first to leverage Docker cache
-COPY requirements.txt .
-
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY . .
+
+RUN pip install -e ".[xland-assistant]"
+
+RUN cd examples/xland-LLM-assistant
 
 # Create data directory and set permissions
 RUN mkdir -p data && \
@@ -41,4 +40,4 @@ HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:${PORT}/health || exit 1
 
 # Run the application with error handling
-CMD ["sh", "-c", "python web_app.py || echo 'Application failed to start' && exit 1"] 
+CMD ["sh", "-c", "python web_app_assistant.py || echo 'Application failed to start' && exit 1"] 

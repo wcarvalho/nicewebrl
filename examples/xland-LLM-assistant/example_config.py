@@ -16,3 +16,7 @@ CHATGPT_API_URL = "PLACEHOLDER"
 # Model Settings
 CLAUDE_MODEL = "PLACEHOLDER"
 CHATGPT_MODEL = "PLACEHOLDER"
+
+# Google Cloud Storage
+BUCKET_NAME = "xland-assistant"
+GOOGLE_CREDENTIALS = "./google-cloud-key.json"

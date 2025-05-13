@@ -7,21 +7,23 @@
 pip install "git+https://github.com/wcarvalho/nicewebrl.git#egg=nicewebrl[xland-assistant]"
 # or 
 pip install -e ".[xland-assistant]"
-
+```
+**From the this directory** `examples/xland-minigrid`:
+```
 # Run the web app
-cd examples/xland-minigrid
 python web_app_assistant.py
 ```
 
 ## Launching online with fly.io
 
+**From root directory**:
 ```
 # setup configuration
 flyctl launch \
 --dockerfile Dockerfile \
 --name xland-assistant \
 --config xland-assistant.toml \
---vm-size 'performance-2x'
+--vm-size 'performance-2x' --yes
 
 # deploy to servers
 flyctl deploy --config xland-assistant.toml

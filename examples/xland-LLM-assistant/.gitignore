@@ -1,2 +1,4 @@
 config.py
-./google-cloud-key.json
+*google-cloud-key*
+.dockerignore
+*toml
