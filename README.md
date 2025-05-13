@@ -118,3 +118,17 @@ When targetting normative solutions, one may want to study algorithms asymptotic
   </tr>
 </table>
 
+## Citing nicewebrl
+
+If you find nicewebrl useful for your work, please use the citation:
+
+```bibtex
+@software{carvalho2025nicewebrl,
+  title = {NiceWebRL: a framework for comparing humans and AI across many domains},
+  author = {Carvalho, wilka},
+  url = {https://github.com/wcarvalho/nicewebrl},
+  year = {2025},
+}
+```
+
+
