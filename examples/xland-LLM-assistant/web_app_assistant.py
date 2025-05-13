@@ -601,18 +601,49 @@ async def index(request: Request):
     )
   )
   with card:
-    meta_container = ui.row()
+    meta_container = ui.column()
     with meta_container.style("align-items: center;"):
-      stage_container = ui.column()
-      llm_container = ui.column().style(
-        "flex: 1; padding: 16px; background-color: #f5f5f5;"
-      )
-      ui.timer(
-        interval=10,
-        callback=lambda: check_if_over(episode_limit=200, container=stage_container),
-      )
-      await start_experiment(meta_container, stage_container, llm_container)
+      display_container = ui.row()
+      with display_container.style("align-items: center;"):
+        stage_container = ui.column()
+        llm_container = ui.column().style(
+          "flex: 1; padding: 16px; background-color: #f5f5f5;"
+        )
+        ui.timer(
+          interval=10,
+          callback=lambda: check_if_over(episode_limit=200, container=stage_container),
+        )
+      footer_container = ui.row()
+    with meta_container.style("align-items: center;"):
+      await footer(footer_container)
+      with display_container.style("align-items: center;"):
+        await start_experiment(display_container, stage_container, llm_container)
 
+async def footer(footer_container):
+  """Add user information and progress bar to the footer"""
+  with footer_container:
+    with ui.row():
+
+      ui.label().bind_text_from(app.storage.user, "user_id", lambda v: f"user id: {v}.")
+      ui.label()
+
+      def text_display(v):
+        return f"stage: {int(v) + 1}/{experiment.num_stages}."
+
+      ui.label().bind_text_from(app.storage.user, "stage_idx", text_display)
+      ui.label()
+      ui.label()
+      ui.label().bind_text_from(
+        app.storage.user, "session_duration", lambda v: f"minutes passed: {int(v)}."
+      )
+
+    nicewebrl.progress_bar()
+
+    ui.button(
+      "Toggle fullscreen",
+      icon="fullscreen",
+      on_click=nicewebrl.utils.toggle_fullscreen,
+    ).props("flat")
 
 ui.run(
   storage_secret="private key to secure the browser session cookie",

@@ -34,6 +34,7 @@ class SimpleExperiment(Container):
   async def initialize(self):
     app.storage.user["stage_idx"] = app.storage.user.get("stage_idx", 0)
     app.storage.user["stage_name"] = "undefined"
+    app.storage.user["num_stages"] = self.num_stages
     stage_order = await self.get_stage_order()
     stage_names_in_order = [self.stages[i].name for i in stage_order]
     logger.info(f"Stage order: {stage_names_in_order}")
@@ -119,6 +120,8 @@ class Experiment(Container):
     app.storage.user["block_idx"] = app.storage.user.get("block_idx", 0)
     app.storage.user["block_name"] = "undefined"
     app.storage.user["stage_name"] = "undefined"
+    app.storage.user["num_blocks"] = self.num_blocks
+    app.storage.user["num_stages"] = self.num_stages
     block_order = await self.get_block_order()
     block_names_in_order = [self.blocks[i].name for i in block_order]
     logger.info(f"Block order: {block_names_in_order}")

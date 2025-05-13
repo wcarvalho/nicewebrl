@@ -146,7 +146,7 @@ def create_env_with_ruleset(ruleset_key):
   return env, benchmark, env_params, rule_text
 
 
-num_envs = 5
+num_envs = 3
 
 # Create 5 different environments
 env, benchmark, env_params, rule_text = create_env_with_ruleset(0)
@@ -208,7 +208,7 @@ async def env_stage_display_fn(
   stage_state = stage.get_user_data("stage_state")
   rule = benchmark.sample_ruleset(nicewebrl.new_rng())
   current_rule_text = describe_ruleset(rule)
-  stage.set_user_data(rule_text=current_rule_text)
+  await stage.set_user_data(rule_text=current_rule_text)
 
   with container.style("align-items: center;"):
     nicewebrl.clear_element(container)
@@ -221,7 +221,11 @@ async def env_stage_display_fn(
         ui.label().bind_text_from(
           stage_state, "nepisodes", lambda n: f"Try: {n}/{stage.max_episodes}"
         )
-    ui.markdown("You have  50 steps to figure out and complete the task. You can ask the AI for help.")
+    ui.markdown("""
+    You have  50 steps to figure out and complete the task. You can ask the AI for help.
+    
+    Red exclamations indicate out of bounds.
+    """)
     ui.html(make_image_html(src=new_obs_base64))
 
 

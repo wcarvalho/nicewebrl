@@ -4,7 +4,8 @@
 **From the root directory**
 ```bash
 # Install dependencies
-pip install "git+https://github.com/wcarvalho/nicewebrl.git#egg=nicewebrl[xland-assistant]"
+pip install "nicewebrl[xland-assistant] @ git+https://github.com/wcarvalho/nicewebrl.git"
+
 # or 
 pip install -e ".[xland-assistant]"
 ```
