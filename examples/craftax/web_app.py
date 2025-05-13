@@ -275,6 +275,6 @@ async def index(request: Request):
 ui.run(
   storage_secret="private key to secure the browser session cookie",
   # reload='FLY_ALLOC_ID' not in os.environ,
-  reload=False,
+  reload=True,
   title="Crafter Web App",
 )

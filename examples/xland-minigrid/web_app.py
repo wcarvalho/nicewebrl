@@ -76,7 +76,7 @@ async def global_handle_key_press(e, container):
   stage_idx = app.storage.user["stage_idx"]
   if app.storage.user["stage_idx"] >= len(experiment.all_stages):
     return
-  
+
   stage = experiment.all_stages[stage_idx]
   if stage.get_user_data("finished", False):
     return
@@ -85,7 +85,8 @@ async def global_handle_key_press(e, container):
   local_handle_key_press = stage.get_user_data("local_handle_key_press")
   if local_handle_key_press is not None:
     await local_handle_key_press()
-  
+
+
 def restore_texture_cache_if_needed():
   """Restore texture cache files from local cache if they don't exist in the package directory."""
   # Get paths for texture cache files
@@ -103,14 +104,13 @@ def restore_texture_cache_if_needed():
 
   # Copy texture cache files if needed
   if not os.path.exists(TEXTURE_CACHE_FILE) and os.path.exists(source_cache):
-    logger.info(
-      f"Restoring texture cache from {source_cache} to {TEXTURE_CACHE_FILE}"
-    )
+    logger.info(f"Restoring texture cache from {source_cache} to {TEXTURE_CACHE_FILE}")
     shutil.copy2(source_cache, TEXTURE_CACHE_FILE)
     logger.info("Regular cache file restored successfully!")
   else:
     logger.info(f"{TEXTURE_CACHE_FILE} already exists.")
-  
+
+
 async def load_craftax_module():
   global experiment, load_start_time, load_error
   load_start_time = datetime.now()
@@ -126,6 +126,7 @@ async def load_craftax_module():
     def import_with_logging():
       try:
         import experiment_structure
+
         logger.info("Import successful")
         return experiment_structure
       except Exception as e:
@@ -146,6 +147,7 @@ async def load_craftax_module():
     raise
   finally:
     craftax_loaded.set()
+
 
 #####################################
 # Setup database for storing experiment data
@@ -171,6 +173,7 @@ async def close_db() -> None:
 async def startup():
   asyncio.create_task(load_craftax_module())
   await init_db()
+
 
 app.on_shutdown(close_db)
 
@@ -293,6 +296,7 @@ async def run_stage(stage, container):
 # Root page
 #####################################
 
+
 async def check_if_over(container, episode_limit=60):
   minutes_passed = nicewebrl.get_user_session_minutes()
   minutes_passed = app.storage.user["session_duration"]
@@ -300,8 +304,10 @@ async def check_if_over(container, episode_limit=60):
     # define custom behavior on time-out
     pass
 
+
 # Add status endpoint for loading screen
 router = APIRouter()
+
 
 @router.get("/status")
 async def get_status():
@@ -325,47 +331,50 @@ async def get_status():
 
 app.include_router(router)
 
+
 # helper to show loading screen
 def show_loading_screen(craftax_loaded: asyncio.Event, load_error: str | None = None):
-    """Displays a loading UI while waiting for the Craftax module to load."""
+  """Displays a loading UI while waiting for the Craftax module to load."""
 
-    # Inject JS to ping the server periodically
-    with open(nicewebrl.basic_javascript_file()) as f:
-        ui.add_body_html("<script>" + f.read() + "</script>")
+  # Inject JS to ping the server periodically
+  with open(nicewebrl.basic_javascript_file()) as f:
+    ui.add_body_html("<script>" + f.read() + "</script>")
 
-    # If the module isn't loaded, show loading UI
-    if not craftax_loaded.is_set():
-        with ui.card().classes("fixed-center") as card:
-            card.style("width: 80vw; max-height: 90vh;")
+  # If the module isn't loaded, show loading UI
+  if not craftax_loaded.is_set():
+    with ui.card().classes("fixed-center") as card:
+      card.style("width: 80vw; max-height: 90vh;")
 
-            ui.label("Loading experiment... This will take up to 5 minutes.").classes("text-h4")
-            ui.label("Please don't close or refresh the page")
+      ui.label("Loading experiment... This will take up to 5 minutes.").classes(
+        "text-h4"
+      )
+      ui.label("Please don't close or refresh the page")
 
-            elapsed_label = ui.label("Time elapsed: 0 seconds")
-            status_label = ui.label("Current status: Initializing...")
-            error_label = ui.label().classes("text-red")
+      elapsed_label = ui.label("Time elapsed: 0 seconds")
+      status_label = ui.label("Current status: Initializing...")
+      error_label = ui.label().classes("text-red")
 
-            start_time = time.time()
+      start_time = time.time()
 
-            async def update_loading_info():
-                seconds = int(time.time() - start_time)
-                elapsed_label.text = f"Time elapsed: {seconds} seconds"
+      async def update_loading_info():
+        seconds = int(time.time() - start_time)
+        elapsed_label.text = f"Time elapsed: {seconds} seconds"
 
-                if load_error:
-                    error_label.text = f"Error: {load_error}"
-                    status_label.text = "Status: Failed to load"
+        if load_error:
+          error_label.text = f"Error: {load_error}"
+          status_label.text = "Status: Failed to load"
 
-                if seconds % 10 == 0:
-                    ui.run_javascript(f"console.log('loading for {seconds} seconds')")
-                    logger.info(f"Still loading after {seconds} seconds")
+        if seconds % 10 == 0:
+          ui.run_javascript(f"console.log('loading for {seconds} seconds')")
+          logger.info(f"Still loading after {seconds} seconds")
 
-                return not craftax_loaded.is_set()
+        return not craftax_loaded.is_set()
 
-            # Periodic update every 1 second
-            ui.timer(1.0, update_loading_info)
+      # Periodic update every 1 second
+      ui.timer(1.0, update_loading_info)
 
-            # Add client-side status polling and error logging
-            ui.add_body_html("""
+      # Add client-side status polling and error logging
+      ui.add_body_html("""
                 <script>
                 let lastPingTime = Date.now();
                 
@@ -405,6 +414,7 @@ def show_loading_screen(craftax_loaded: asyncio.Event, load_error: str | None = 
                 };
                 </script>
             """)
+
 
 @ui.page("/")
 async def index(request: Request):
@@ -470,11 +480,6 @@ ui.run(
   host="0.0.0.0",
   port=8080,
   # reload='FLY_ALLOC_ID' not in os.environ,
-  reload=False,
-<<<<<<< HEAD:examples/crafter/web_app.py
-  title="Crafter Web App",
-)
-=======
+  reload=True,
   title="XLand-MiniGrid Web App",
 )
->>>>>>> main:examples/xland-minigrid/web_app.py

@@ -29,20 +29,29 @@ VERBOSITY = 1
 ########################################
 # actions defined here: https://github.com/dunnolab/xland-minigrid/blob/a46e78ce92f28bc90b8aac96d3b7b7792fb5bf3b/src/xminigrid/core/actions.py#L112
 
+
 class Actions(IntEnum):
   FORWARD = 0
   RIGHT = 1
   LEFT = 2
-  PICKUP = 3  
+  PICKUP = 3
   PUTDOWN = 4
   TOGGLE = 5
 
-actions = [Actions.FORWARD, Actions.RIGHT, Actions.LEFT, Actions.PICKUP, Actions.PUTDOWN, Actions.TOGGLE]
+
+actions = [
+  Actions.FORWARD,
+  Actions.RIGHT,
+  Actions.LEFT,
+  Actions.PICKUP,
+  Actions.PUTDOWN,
+  Actions.TOGGLE,
+]
 
 action_array = jnp.array([a.value for a in actions])
-action_keys = [
-  "ArrowUp", "ArrowRight", "ArrowLeft", "p", 'l', ' ']
+action_keys = ["ArrowUp", "ArrowRight", "ArrowLeft", "p", "l", " "]
 action_to_name = [a.name for a in actions]
+
 
 ########################################
 # Define Craftax environment
@@ -61,9 +70,16 @@ class FixXlandArgsWrapper:
   def reset(self, key: jax.Array, params: struct.PyTreeNode) -> nicewebrl.TimeStep:
     return self._env.reset(params=params, key=key)
 
-  def step(self, key: jax.Array, prior_timestep: nicewebrl.TimeStep, action: jax.Array, params: struct.PyTreeNode) -> nicewebrl.TimeStep:
+  def step(
+    self,
+    key: jax.Array,
+    prior_timestep: nicewebrl.TimeStep,
+    action: jax.Array,
+    params: struct.PyTreeNode,
+  ) -> nicewebrl.TimeStep:
     del key
     return self._env.step(params=params, timestep=prior_timestep, action=action)
+
 
 # to list available environments: xminigrid.registered_environments()
 jax_env, env_params = xminigrid.make("XLand-MiniGrid-R9-25x25")
@@ -91,13 +107,12 @@ def render_fn(timestep: nicewebrl.TimeStep):
   image = _render_obs(timestep.observation)
   return image.astype(jnp.uint8)
 
+
 # jit it so fast
 render_fn = jax.jit(render_fn)
 
 # precompile vmapped render fn that will vmap over all actions
-vmap_render_fn = jax_web_env.precompile_vmap_render_fn(
-  render_fn, env_params
-)
+vmap_render_fn = jax_web_env.precompile_vmap_render_fn(render_fn, env_params)
 
 
 ########################################
@@ -129,6 +144,7 @@ all_stages.append(instruction_stage)
 # ------------------
 # Environment stage
 # ------------------
+
 
 def make_image_html(src):
   html = f"""
