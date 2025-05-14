@@ -9,7 +9,7 @@ from nicewebrl.stages import Block, Stage
 from nicewebrl.container import Container
 from nicewebrl.nicejax import new_rng
 from nicewebrl.logging import get_logger
-from nicewebrl.utils import get_user_lock
+from nicewebrl.utils import get_user_lock, get_progress
 
 logger = get_logger(__name__)
 
@@ -26,6 +26,9 @@ class SimpleExperiment(Container):
       self.name = f"experiment_{uuid.uuid4().hex[:8]}"
     if isinstance(self.randomize, bool):
       self.randomize = [self.randomize] * len(self.stages)
+
+    for idx, stage in enumerate(self.stages):
+      stage.unique_id = f"{idx}_{stage.unique_id}"
 
   @property
   def num_stages(self):
@@ -82,6 +85,7 @@ class SimpleExperiment(Container):
     stage_idx = self.get_experiment_stage_idx()
     async with get_user_lock():
       app.storage.user["stage_idx"] = stage_idx + 1
+    get_progress()
 
   def not_finished(self):
     stage_idx = self.get_experiment_stage_idx()
@@ -106,6 +110,13 @@ class Experiment(Container):
     super().__post_init__()
     if self.name is None:
       self.name = f"experiment_{uuid.uuid4().hex[:8]}"
+    
+    stage_idx = 0
+    for idx, block in enumerate(self.blocks):
+      block.unique_id = f"{idx}_{block.unique_id}"
+      for stage in block.stages:
+        stage.unique_id = f"{stage_idx}_{stage.unique_id}"
+        stage_idx += 1
 
   @property
   def num_stages(self):
@@ -205,6 +216,7 @@ class Experiment(Container):
     block_idx = self.get_block_idx()
     async with get_user_lock():
       app.storage.user["block_idx"] = block_idx + 1
+    get_progress()
 
   async def advance_stage(self):
     # advance stage within the block
@@ -215,6 +227,7 @@ class Experiment(Container):
     stage_idx = self.get_experiment_stage_idx()
     async with get_user_lock():
       app.storage.user["stage_idx"] = stage_idx + 1
+    get_progress()
 
   def not_finished(self):
     block_idx = self.get_block_idx()

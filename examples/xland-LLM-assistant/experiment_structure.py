@@ -11,30 +11,9 @@ from nicewebrl import get_logger
 import xminigrid
 from xminigrid.wrappers import GymAutoResetWrapper
 from xminigrid.experimental.img_obs import RGBImgObservationWrapper
-from xminigrid.types import RuleSet
 from xminigrid.rendering.text_render import _text_encode_rule, _encode_tile
 
-from xminigrid.benchmarks import (
-  Benchmark,
-  load_benchmark,
-  load_benchmark_from_path,
-  load_bz2_pickle,
-  DATA_PATH,
-  NAME2HFFILENAME,
-)
-from xminigrid.rendering.text_render import print_ruleset
 
-# utils for the demonstation
-from xminigrid.core.grid import room
-from xminigrid.types import AgentState
-from xminigrid.core.actions import take_action
-from xminigrid.core.constants import Tiles, Colors, TILES_REGISTRY
-from xminigrid.rendering.rgb_render import render
-from xminigrid.benchmarks import Benchmark
-
-# rules and goals
-from xminigrid.core.goals import check_goal, AgentNearGoal
-from xminigrid.core.rules import check_rule, AgentNearRule
 
 logger = get_logger(__name__)
 
@@ -297,6 +276,7 @@ async def feedback_display_fn(stage, container):
           ).props('inline')
         answers[q] = None
     await completed_all.wait()
+    return answers
 
 feedback_stage = FeedbackStage(
   name="Feedback",

@@ -172,6 +172,11 @@ class Stage:
     self.user_data = {}
     self._lock = Lock()  # Add lock for thread safety
     self._user_locks = {}  # Dictionary to store per-user locks
+    self.unique_id = f"stage_{uuid.uuid4().hex}"
+    self.metadata.update(
+      type="Stage",
+      unique_id=self.unique_id,
+    )
 
   def get_user_data(self, key, value=None):
     user_seed = app.storage.user["seed"]
@@ -225,11 +230,12 @@ class FeedbackStage(Stage):
   user_save_file_fn: Callable[[], str] = None
 
   def __post_init__(self):
-    self.user_data = {}
-    self._lock = Lock()  # Add lock for thread safety
-    self._user_locks = {}  # Dictionary to store per-user locks
+    super().__post_init__()
     if self.user_save_file_fn is None:
       self.user_save_file_fn = user_data_file
+    self.metadata.update(
+      type="FeedbackStage",
+    )
 
   async def activate(self, container: ui.element):
     results = await self.display_fn(stage=self, container=container)
@@ -239,7 +245,6 @@ class FeedbackStage(Stage):
       sex=app.storage.user.get("sex"),
     )
     metadata = copy.deepcopy(self.metadata)
-    metadata["type"] = "FeedbackStage"
 
     save_data = dict(
       stage_idx=app.storage.user["stage_idx"],
@@ -773,8 +778,9 @@ class Block(Container):
     self._lock = Lock()  # Add lock for thread safety
     self._user_locks = {}  # Dictionary to store per-user locks
     if self.name is None:
-      self.name = f"block_{uuid.uuid4().hex[:8]}"
+      self.name = f"block_{uuid.uuid4().hex}"
 
+    self.unique_id = f"block_{uuid.uuid4().hex}"
     # Broadcast metadata
     self.metadata["name"] = self.name
     for stage in self.stages:

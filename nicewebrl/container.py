@@ -13,7 +13,7 @@ class Container:
     self._lock = Lock()  # Add lock for thread safety
     self._user_locks = {}  # Dictionary to store per-user locks
     if self.name is None:
-      self.name = f"container_{uuid.uuid4().hex[:8]}"
+      self.name = f"container_{uuid.uuid4().hex}"
 
   def get_data(self):
     return app.storage.user.get(f"{self.name}_data", {})

@@ -10,10 +10,10 @@ import config
 import nicewebrl
 from nicewebrl.logging import setup_logging, get_logger
 from nicewebrl.utils import wait_for_button_or_keypress
-from nicewebrl import stages, TimeStep, EnvParams
+from nicewebrl import stages, TimeStep
 import time
 import json
-from google_cloud_utils import save_to_gcs_with_retries, GOOGLE_CREDENTIALS
+from upload_google_data import save_to_gcs_with_retries, GOOGLE_CREDENTIALS
 
 from experiment_structure import experiment, describe_ruleset
 import config
@@ -477,7 +477,7 @@ async def finish_experiment(container):
     ui.markdown(
       "### Please record the following code which you will need to provide for compensation"
     )
-    ui.markdown("### 'carvalho.assistants'")
+    ui.markdown("### 'carvalho.assistants 3'")
     ui.markdown("#### You may close the browser")
 
 
@@ -628,7 +628,8 @@ async def footer(footer_container):
       ui.label()
 
       def text_display(v):
-        return f"stage: {int(v) + 1}/{experiment.num_stages}."
+        stage_idx = max(experiment.num_stages, int(v) + 1)
+        return f"stage: {stage_idx}/{experiment.num_stages}."
 
       ui.label().bind_text_from(app.storage.user, "stage_idx", text_display)
       ui.label()
@@ -637,7 +638,8 @@ async def footer(footer_container):
         app.storage.user, "session_duration", lambda v: f"minutes passed: {int(v)}."
       )
 
-    nicewebrl.progress_bar()
+    ui.linear_progress(
+      value=nicewebrl.get_progress()).bind_value_from(app.storage.user, "stage_progress")
 
     ui.button(
       "Toggle fullscreen",

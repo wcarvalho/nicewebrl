@@ -20,14 +20,14 @@ from nicewebrl.utils import prevent_default_spacebar_behavior
 from nicewebrl.utils import user_data_file
 from nicewebrl.utils import user_metadata_file
 from nicewebrl.utils import save_metadata
-from nicewebrl.utils import progress_bar
-
+from nicewebrl.utils import get_progress
+from nicewebrl.utils import load_data
 
 from nicewebrl.nicejax import get_rng
 from nicewebrl.nicejax import new_rng
 from nicewebrl.nicejax import match_types
 from nicewebrl.nicejax import make_serializable
-from nicewebrl.nicejax import deserialize
+#from nicewebrl.nicejax import deserialize
 from nicewebrl.nicejax import base64_npimage
 from nicewebrl.nicejax import StepType
 from nicewebrl.nicejax import TimeStep

@@ -20,3 +20,6 @@ CHATGPT_MODEL = "PLACEHOLDER"
 # Google Cloud Storage
 BUCKET_NAME = "xland-assistant"
 GOOGLE_CREDENTIALS = "./google-cloud-key.json"
+
+# Data
+DATA_DIR = "./user_data"
