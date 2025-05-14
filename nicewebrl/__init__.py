@@ -56,3 +56,6 @@ from nicewebrl.container import Container
 
 from nicewebrl.logging import get_logger
 from nicewebrl.logging import setup_logging
+
+from nicewebrl.data_analysis import compute_reaction_time
+from nicewebrl.data_analysis import time_diff
