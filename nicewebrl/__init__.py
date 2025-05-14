@@ -34,7 +34,9 @@ from nicewebrl.nicejax import TimeStep
 from nicewebrl.nicejax import EnvParams
 from nicewebrl.nicejax import TimestepWrapper
 from nicewebrl.nicejax import JaxWebEnv
+from nicewebrl.nicejax import MultiAgentJaxWebEnv
 from nicewebrl.nicejax import get_size
+
 
 from nicewebrl.stages import EnvStageState
 from nicewebrl.stages import StageStateModel
@@ -45,6 +47,7 @@ from nicewebrl.stages import Block
 from nicewebrl.stages import prepare_blocks
 from nicewebrl.stages import generate_stage_order
 from nicewebrl.stages import time_diff
+from nicewebrl.stages import MultiAgentEnvStage
 from nicewebrl.stages import broadcast_metadata
 
 from nicewebrl.experiment import Experiment

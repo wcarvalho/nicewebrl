@@ -20,7 +20,8 @@ from nicewebrl.nicejax import new_rng, base64_npimage, make_serializable, TimeSt
 from nicewebrl.logging import get_logger
 from nicewebrl.utils import retry_with_exponential_backoff
 from nicewebrl.utils import write_msgpack_record
-from nicewebrl.nicejax import JaxWebEnv
+from nicewebrl.nicejax import JaxWebEnv, MultiAgentJaxWebEnv
+import numpy as np
 from nicewebrl.container import Container
 from nicewebrl import user_data_file
 
@@ -64,9 +65,9 @@ class StageStateModel(models.Model):
 
 class EnvStageState(struct.PyTreeNode):
   timestep: struct.PyTreeNode
-  nsteps: jax.Array = jnp.array(1, dtype=jnp.int32)
-  nepisodes: jax.Array = jnp.array(1, dtype=jnp.int32)
-  nsuccesses: jax.Array = jnp.array(0, dtype=jnp.int32)
+  nsteps: int = 1
+  nepisodes: int = 1
+  nsuccesses: int = 0
   name: str = "stage"
 
 
@@ -762,6 +763,132 @@ class EnvStage(Stage):
 
   async def handle_button_press(self, container):
     pass  # do nothing
+
+
+
+@dataclasses.dataclass
+class MultiAgentEnvStage(EnvStage):
+    """A stage class for handling interactive multi-agent environment episodes.
+    
+    This class extends EnvStage to support environments with multiple agents,
+    where one agent is controlled by the user and the other by a model.
+    
+    Additional Args:
+        web_env (MultiAgentJaxWebEnv): The multi-agent environment instance.
+        model (Any): Optional model to control the non-human agent.
+        model_params (Any): Parameters for the model.
+        num_seeds (int): Number of model parameter seeds available.
+        init_hidden_state_fn (Any): Function to initialize the model's hidden state.
+        human_id (Optional[int]): ID of the human-controlled agent (0 or 1).
+        using_param_stack (bool): Whether model_params is a stack of parameters.
+    """
+    
+    web_env: MultiAgentJaxWebEnv = None
+    max_timesteps: Optional[int] = 100
+    model: Any = None
+    model_params: Any = None
+    num_seeds: int = 6
+    init_hidden_state_fn: Any = None
+    human_id: Optional[int] = None  # is agent 0 or agent 1
+    using_param_stack: bool = False
+    check_finished: Optional[TimestepCallFn] = None
+
+    def __post_init__(self):
+        super().__post_init__()
+        
+        if self.check_finished is None:
+            self.check_finished = lambda timestep: timestep.last()
+
+    async def step_and_send_timestep(
+            self,
+            container,
+            update_display: bool = True):
+        #############################
+        # get next images and store them client-side
+        # setup code to display next state
+        #############################
+        rng = new_rng()
+        timestep = self.get_user_data("stage_state").timestep
+        
+        # Get the other agent's action using the model if available
+        if self.model is not None:
+            all_obs = self.web_env.env._env.get_obs(timestep.state)
+            human_id = self.get_user_data('human_id')
+            if human_id == 0:
+                other_agent_obs = all_obs['agent_1']
+            else:
+                other_agent_obs = all_obs['agent_0']
+            other_agent_obs = other_agent_obs.flatten()
+            other_agent_obs = other_agent_obs[None] # add environment dimension
+            other_agent_obs = other_agent_obs[None] # add batch dimension
+            agent_pos = timestep.state.agent_pos.astype(jnp.int32)
+            agent_pos = agent_pos[None] # add environment dimension
+            agent_pos = agent_pos[None] # add batch dimension
+
+            prev_was_last = timestep.last()
+            sim_done = prev_was_last.astype(jnp.int32).reshape((1,1))
+
+            ac_input = (other_agent_obs, sim_done, agent_pos)
+            hidden_state = self.get_user_data('hidden_state')
+            model_index = self.get_user_data('model_index')  # if model param is a stack of params we only want one set
+            if self.using_param_stack:
+                model_params = jax.tree_map(lambda x: x[model_index], self.model_params)
+            else:
+                model_params = self.model_params
+            action_res = self.model.apply(model_params, hidden_state, ac_input)
+            hidden_state, pi = action_res[0], action_res[1]
+            await self.set_user_data(hidden_state=hidden_state)
+            other_agent_action = jnp.argmax(pi.probs, 2)[0]  # get max prob action
+            other_agent_action = other_agent_action.squeeze().astype(jnp.int32)
+        else:
+            other_agent_action = 4  # Default behavior if no model exists
+
+        # Get next timesteps with the other agent's action
+        next_timesteps = self.web_env.next_steps(
+            rng, timestep, self.env_params, 
+            other_action=other_agent_action, 
+            h_id=self.get_user_data('human_id'))
+            
+        next_images = self.vmap_render_fn(next_timesteps)
+        next_images = {
+            self.action_keys[idx]: base64_npimage(image) 
+            for idx, image in enumerate(next_images)
+        }
+
+        js_code = f"window.next_states = {next_images};"
+        ui.run_javascript(js_code)
+
+        await self.set_user_data(next_timesteps=next_timesteps)
+        
+        # Display image
+        if update_display:
+            await self.display_timestep(container, timestep)
+        else:
+            ui.run_javascript("window.imageSeenTime = window.next_imageSeenTime;", timeout=10)
+
+    async def activate(self, container: ui.element):
+        """Initialize the stage and set up the human agent ID if not specified."""
+        async with self.get_user_lock():
+            # Randomly assign human ID if not specified
+            rng = new_rng()
+            if self.human_id is None:
+                human_id = jax.random.randint(rng, (), 0, 2)
+                human_color = 'Red' if human_id == 0 else 'Blue'
+                await self.set_user_data(human_id=human_id)
+                await self.set_user_data(human_color=human_color)
+                rng = new_rng()
+            
+            # Initialize model if available
+            if self.model is not None:
+                hidden_state = self.init_hidden_state_fn()
+                await self.set_user_data(hidden_state=hidden_state)
+                
+                # Sample model index
+                model_index = np.random.randint(0, self.num_seeds)
+                await self.set_user_data(model_index=model_index)
+            
+            # Continue with standard activation
+            await super().activate(container)
 
 
 @dataclasses.dataclass
