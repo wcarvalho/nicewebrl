@@ -14,6 +14,7 @@ import jax.numpy as jnp
 import jax.random
 import numpy as np
 import random
+import sys
 from nicegui import app, ui
 from PIL import Image
 
@@ -83,110 +84,6 @@ def make_serializable(obj: Any):
     return obj
 
 
-def deserialize(cls: struct.PyTreeNode, data: Any):
-  """
-  Automatically deserialize data into the given class.
-
-  Args:
-  cls: The class to deserialize into
-  data: The data to deserialize
-
-  Returns:
-  An instance of cls with deserialized data
-  """
-  if isinstance(data, str):
-    return data
-  elif isinstance(data, int):
-    try:
-      return jnp.array(data, dtype=jnp.int32)
-    except OverflowError:
-      return jnp.array(data, dtype=jnp.uint32)
-  elif isinstance(data, float):
-    return jnp.array(data, dtype=jnp.float32)
-  elif isinstance(data, bool):
-    return jnp.array(data, dtype=jnp.bool_)
-
-  if isinstance(data, jnp.ndarray):
-    return data
-
-  if isinstance(data, list):
-    return [deserialize(cls, item) for item in data]
-
-  if cls == jnp.ndarray:
-    is_dict = isinstance(data, dict)
-    integer_keys = all(k.isdigit() for k in data.keys())
-    # number_values = all(
-    # isinstance(v, (int, float)) for v in data.values())
-    if is_dict and integer_keys:
-      array = [deserialize(cls, data[str(i)]) for i in range(len(data))]
-      try:
-        return jnp.array(array)
-      except OverflowError:
-        if isinstance(data["0"], int):
-          return jnp.array(array, dtype=jnp.uint32)
-        else:
-          raise RuntimeError("how to handle?")
-    else:
-      raise RuntimeError("malformed numpy array?")
-
-  if isinstance(data, dict):
-    hints = get_type_hints(cls)
-    kwargs = {}
-    for key, value in data.items():
-      if key in hints:
-        field_type = hints[key]
-        # Check if the field_type is Optional
-        if typing.get_origin(field_type) is typing.Union and type(
-          None
-        ) in typing.get_args(field_type):
-          # It's an Optional type
-          if value is None:
-            kwargs[key] = None
-          else:
-            # Get the type inside Optional
-            inner_type = next(
-              t for t in typing.get_args(field_type) if t is not type(None)
-            )
-            kwargs[key] = deserialize(inner_type, value)
-        elif inspect.isclass(field_type) and (
-          issubclass(field_type, struct.PyTreeNode)
-          or hasattr(field_type, "__annotations__")
-        ):
-          kwargs[key] = deserialize(field_type, value)
-
-        else:
-          kwargs[key] = value
-      else:
-        kwargs[key] = value
-    return cls(**kwargs)
-
-  raise ValueError(f"Unable to deserialize {data} into {cls}")
-
-
-def deserialize_bytes(
-  cls: struct.PyTreeNode,
-  encoded_data: bytes,
-):
-  """deserialize bytes.
-
-  NOTE: this is suboptimal compared to just doing
-  >> # serialize bytes
-  >> encoded_data = serialization.to_bytes(data)
-  >> # deserialize bytes
-  >> reconstructed = serialization.from_bytes(example, encoded_data)
-
-  Args:
-      cls (struct.PyTreeNode): _description_
-      encoded_data (bytes): _description_
-
-  Returns:
-      _type_: _description_
-  """
-  deserialized_tree = serialization.from_bytes(None, encoded_data)
-  deserialized = deserialize(cls, deserialized_tree)
-  return deserialized
-
-
 def base64_npimage(image: np.ndarray):
   image = np.asarray(image)
   buffer = io.BytesIO()
@@ -200,11 +97,19 @@ def base64_npimage(image: np.ndarray):
   return "data:image/jpeg;base64," + encoded_image
 
 
+def get_size(pytree):
+  leaves = jax.tree_util.tree_leaves(pytree)
+  return sum(
+    leaf.nbytes if hasattr(leaf, "nbytes") else sys.getsizeof(leaf) for leaf in leaves
+  )
+
+
 class StepType(jnp.uint8):
   FIRST: jax.Array = jnp.asarray(0, dtype=jnp.uint8)
   MID: jax.Array = jnp.asarray(1, dtype=jnp.uint8)
   LAST: jax.Array = jnp.asarray(2, dtype=jnp.uint8)
 
+EnvParams = struct.PyTreeNode
 
 class TimeStep(struct.PyTreeNode):
   state: struct.PyTreeNode
@@ -233,12 +138,13 @@ class TimestepWrapper(object):
     autoreset: bool = True,
     use_params: bool = True,
     num_leading_dims: int = 0,
+    reset_w_batch_dim: bool = True,
   ):
     self._env = env
     self._autoreset = autoreset
     self._use_params = use_params
     self._num_leading_dims = num_leading_dims
-
+    self._reset_w_batch_dim = reset_w_batch_dim
   # provide proxy access to regular attributes of wrapped object
   def __getattr__(self, name):
     return getattr(self._env, name)
@@ -251,8 +157,11 @@ class TimestepWrapper(object):
     else:
       obs, state = self._env.reset(key)
     # Get shape from first leaf of obs, assuming it's a batch dimension
-    first_leaf = jax.tree_util.tree_leaves(obs)[0]
-    shape = first_leaf.shape[: self._num_leading_dims]
+    if self._reset_w_batch_dim:
+      first_leaf = jax.tree_util.tree_leaves(obs)[0]
+      shape = first_leaf.shape[: self._num_leading_dims]
+    else:
+      shape = ()
     timestep = TimeStep(
       state=state,
       observation=obs,
@@ -279,6 +188,10 @@ class TimestepWrapper(object):
           key, prior_timestep_.state, action
         )
       del info
+      if type(done) == dict:  # multi-agent
+        done = done['__all__']
+      if type(reward) == dict:   # multi-agent
+        reward = reward['agent_0'].astype(jnp.float32)
       return TimeStep(
         state=state,
         observation=obs,
@@ -329,9 +242,6 @@ class JaxWebEnv:
     if actions is None:
       actions = try_to_get_actions(env)
 
-    def reset(rng, params):
-      return env.reset(rng, params)
-
     def next_steps(rng, timestep, env_params):
       # vmap over rngs and actions. re-use timestep
       timesteps = jax.vmap(env.step, in_axes=(None, None, 0, None), out_axes=0)(
@@ -339,7 +249,7 @@ class JaxWebEnv:
       )
       return timesteps
 
-    self.reset = jax.jit(reset)
+    self.reset = jax.jit(env.reset)
     self.next_steps = jax.jit(next_steps)
 
   def precompile(self, dummy_env_params: Optional[struct.PyTreeNode] = None) -> None:
@@ -369,3 +279,62 @@ class JaxWebEnv:
     vmap_render_fn = vmap_render_fn.lower(next_timesteps).compile()
     print(f"\ttime: {time.time() - start}")
     return vmap_render_fn
+
+
+class MultiAgentJaxWebEnv:
+    def __init__(self, env, actions=None):
+        """The main purpose of this class is to precompile jax functions before experiment starts."""
+        self.env = env
+        assert hasattr(env, 'reset'), 'env needs reset function'
+        assert hasattr(env, 'step'), 'env needs step function'
+
+        if actions is None:
+            actions = try_to_get_actions(env)
+
+        def reset(rng, params):
+            return env.reset(rng, {'random_reset_fn': 'reset_all'})
+
+        def next_steps(rng, timestep, env_params, other_action=4, h_id=0):
+            # vmap over rngs and actions. re-use timestep
+            def step_env(rng, timestep, agent_0_action, agent_1_action, env_params):
+                action_dict = {
+                    'agent_0': agent_0_action,
+                    'agent_1': agent_1_action,
+                }
+                return env.step(rng, timestep, action_dict, env_params)
+            agent_0_action = jnp.where(h_id == 0, actions, jnp.repeat(other_action, actions.shape[0]))
+            agent_1_action = jnp.where(h_id == 1, actions, jnp.repeat(other_action, actions.shape[0]))
+
+            timesteps = jax.vmap(step_env, in_axes=(None, None, 0, 0, None), out_axes=0)(rng, timestep, agent_0_action, agent_1_action, env_params)
+            return timesteps
+
+        self.reset = jax.jit(reset)
+        self.next_steps = jax.jit(next_steps)
+
+    def precompile(self, dummy_env_params: struct.PyTreeNode={'random_reset_fn': 'reset_all'}) -> None:
+        """Call this function to pre-compile jax functions before experiment starts."""
+        logger.info("Compiling jax environment functions.")
+        start = time.time()
+        dummy_rng = jax.random.PRNGKey(0)
+        self.reset = self.reset.lower(dummy_rng, dummy_env_params).compile()
+        timestep = self.reset(dummy_rng, dummy_env_params)
+        self.next_steps = self.next_steps.lower(
+            dummy_rng, timestep, dummy_env_params, other_action=4, h_id=0).compile()
+        logger.info(f"\ttime: {time.time()-start}")
+
+    def precompile_vmap_render_fn(
+            self,
+            render_fn: RenderFn,
+            dummy_env_params: struct.PyTreeNode={'random_reset_fn': 'reset_all'}) -> RenderFn:
+        """Call this function to pre-compile a multi-render function before experiment starts."""
+        logger.info("Compiling multi-render function.")
+        start = time.time()
+        vmap_render_fn = jax.jit(jax.vmap(render_fn))
+        dummy_rng = jax.random.PRNGKey(0)
+        timestep = self.reset(dummy_rng, dummy_env_params)
+        next_timesteps = self.next_steps(
+            dummy_rng, timestep, dummy_env_params, other_action=4, h_id=0)
+        vmap_render_fn = vmap_render_fn.lower(
+            next_timesteps).compile()
+        logger.info(f"\ttime: {time.time()-start}")
+        return vmap_render_fn

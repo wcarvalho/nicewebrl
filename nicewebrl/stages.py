@@ -1,6 +1,6 @@
 from typing import List, Any, Callable, Dict, Optional, Union
 from functools import partial
-
+import uuid
 import asyncio
 from asyncio import Lock
 import aiofiles
@@ -20,7 +20,10 @@ from nicewebrl.nicejax import new_rng, base64_npimage, make_serializable, TimeSt
 from nicewebrl.logging import get_logger
 from nicewebrl.utils import retry_with_exponential_backoff
 from nicewebrl.utils import write_msgpack_record
-from nicewebrl.nicejax import JaxWebEnv
+from nicewebrl.nicejax import JaxWebEnv, MultiAgentJaxWebEnv
+import numpy as np
+from nicewebrl.container import Container
+from nicewebrl import user_data_file
 
 
 FeedbackFn = Callable[[struct.PyTreeNode], Dict]
@@ -53,26 +56,30 @@ class StageStateModel(models.Model):
   id = fields.IntField(primary_key=True)
   name = fields.CharField(max_length=255, index=True)
   session_id = fields.CharField(max_length=255, index=True)
-  stage_idx = fields.IntField(index=True)
+  # stage_idx = fields.IntField(index=True)
   data = fields.BinaryField()
 
   class Meta:
     table = "stage"
 
+
 class EnvStageState(struct.PyTreeNode):
   timestep: struct.PyTreeNode
-  nsteps: jax.Array = jnp.array(1, dtype=jnp.int32)
-  nepisodes: jax.Array = jnp.array(1, dtype=jnp.int32)
-  nsuccesses: jax.Array = jnp.array(0, dtype=jnp.int32)
+  nsteps: int = 1
+  nepisodes: int = 1
+  nsuccesses: int = 0
   name: str = "stage"
 
-async def get_latest_stage_state(example: struct.PyTreeNode, name: str) -> StageStateModel | None:
+
+async def get_latest_stage_state(
+  example: struct.PyTreeNode, name: str
+) -> StageStateModel | None:
   logger.info("Getting latest stage state")
   latest = (
     await StageStateModel.filter(
       session_id=app.storage.browser["id"],
       name=name,
-      stage_idx=app.storage.user["stage_idx"],
+      # stage_idx=app.storage.user["stage_idx"],
     )
     .order_by("-id")
     .first()
@@ -137,7 +144,7 @@ async def save_stage_state(
 ):
   model = StageStateModel(
     session_id=app.storage.browser["id"],
-    stage_idx=app.storage.user["stage_idx"],
+    # stage_idx=app.storage.user["stage_idx"],
     name=stage_state.name,
     data=serialization.to_bytes(stage_state),
   )
@@ -148,7 +155,6 @@ async def save_stage_state(
     max_delay=max_delay,
     synchronous=True,
   )
-
 
 
 @dataclasses.dataclass
@@ -167,6 +173,11 @@ class Stage:
     self.user_data = {}
     self._lock = Lock()  # Add lock for thread safety
     self._user_locks = {}  # Dictionary to store per-user locks
+    self.unique_id = f"stage_{uuid.uuid4().hex}"
+    self.metadata.update(
+      type="Stage",
+      unique_id=self.unique_id,
+    )
 
   def get_user_data(self, key, value=None):
     user_seed = app.storage.user["seed"]
@@ -205,6 +216,9 @@ class Stage:
   async def handle_button_press(self, container):
     await self.finish_stage()
 
+  async def finish_saving_user_data(self):
+    pass
+
 
 @dataclasses.dataclass
 class FeedbackStage(Stage):
@@ -216,6 +230,14 @@ class FeedbackStage(Stage):
   next_button: bool = False
   user_save_file_fn: Callable[[], str] = None
 
+  def __post_init__(self):
+    super().__post_init__()
+    if self.user_save_file_fn is None:
+      self.user_save_file_fn = user_data_file
+    self.metadata.update(
+      type="FeedbackStage",
+    )
+
   async def activate(self, container: ui.element):
     results = await self.display_fn(stage=self, container=container)
     user_data = dict(
@@ -224,7 +246,6 @@ class FeedbackStage(Stage):
       sex=app.storage.user.get("sex"),
     )
     metadata = copy.deepcopy(self.metadata)
-    metadata["type"] = "FeedbackStage"
 
     save_data = dict(
       stage_idx=app.storage.user["stage_idx"],
@@ -290,7 +311,9 @@ class EnvStage(Stage):
   msg_display_time: int = None
   user_save_file_fn: Optional[Callable[[], str]] = None
   autoreset_on_done: bool = False
+  ignore_missing_data: bool = True
   verbosity: int = 0
+  preprocess_timestep: Optional[Callable[[TimeStep], TimeStep]] = lambda t: t
   precompile: bool = True
 
   def __post_init__(self):
@@ -310,9 +333,8 @@ class EnvStage(Stage):
       self.action_to_name = {k: v for k, v in enumerate(self.action_to_name)}
 
     if self.user_save_file_fn is None:
-      self.user_save_file_fn = (
-        lambda: f"data/user={app.storage.user.get('seed')}.msgpack"
-      )
+      self.user_save_file_fn = user_data_file
+
 
     if self.check_finished is None:
       self.check_finished = lambda timestep: False
@@ -356,17 +378,18 @@ class EnvStage(Stage):
       attempt += 1
       try:
         # Set the timestamp in the browser
-        await ui.run_javascript("window.imageSeenTime = new Date();", timeout=2)
+        await ui.run_javascript("window.imageSeenTime = new Date();", timeout=10)
         # If successful, we can return immediately
         return
       except Exception as e:
         if attempt % 10 == 0:  # Log every 10 attempts
           logger.warning(
-            f"{self.name}: Error getting imageSeenTime (attempt {attempt}): {e}"
+            f"'{self.name}': Error getting imageSeenTime (attempt {attempt}): {e}"
           )
         await asyncio.sleep(0.1)  # Short delay between attempts
-        if attempt > 100:
-          ui.notify("Please refresh the page", type="negative")
+        if attempt >= 10:
+          with container:
+            ui.notify("Please refresh the page", type="negative")
           return
 
   async def step_and_send_timestep(self, container, update_display: bool = True):
@@ -433,10 +456,10 @@ class EnvStage(Stage):
     loaded_stage_state = await get_latest_stage_state(
       example=new_stage_state,
       name=self.name,
-      )
+    )
 
     if loaded_stage_state is None:
-      logger.info("No stage state found, starting new stage")
+      logger.info(f"No stage {self.name} state found, starting new stage")
       # await self.start_stage(container, new_stage_state)
       await self.set_user_data(stage_state=new_stage_state)
       asyncio.create_task(save_stage_state(new_stage_state))
@@ -446,10 +469,8 @@ class EnvStage(Stage):
       await self.step_and_send_timestep(container)
 
     else:
-      logger.info("Loading stage state from memory")
-      # await self.load_stage(container, loaded_stage_state)
+      logger.info(f"Loading stage {self.name} state from memory")
       await self.set_user_data(stage_state=loaded_stage_state)
-      await self.wait_for_start(container)
       await self.step_and_send_timestep(container)
 
     await self.set_user_data(started=True)
@@ -475,7 +496,7 @@ class EnvStage(Stage):
     timestep_data = {}
     if self.custom_data_fn is not None:
       timestep_data = self.custom_data_fn(timestep)
-      timestep_data = jax.tree_map(make_serializable, timestep_data)
+      timestep_data = jax.tree.map(make_serializable, timestep_data)
 
     serialized_timestep = serialization.to_bytes(timestep)
 
@@ -516,19 +537,22 @@ class EnvStage(Stage):
       if imageSeenTime is not None and keydownTime is not None:
         stage_state = self.get_user_data("stage_state")
         if self.verbosity:
-          logger.info(f"{name} saved file")
+          logger.info(f"'{name}' saved file")
           logger.info(f"∆t: {time_diff(imageSeenTime, keydownTime) / 1000.0}")
           logger.info(f"stage state: {self.user_stats()}")
           logger.info(f"env step: {stage_state.nsteps}")
 
       else:
-        logger.error(f"{name} saved file")
-        logger.error(f"stage state: {self.user_stats()}")
-        logger.error(f"imageSeenTime={imageSeenTime}, keydownTime={keydownTime}")
-        ui.notification("Error: Stage unexpectedly ending early", type="negative")
-        await self.set_user_data(finished=True, final_save=True)
+        if not self.ignore_missing_data:
+          logger.error(f"'{name}' saved file")
+          logger.error(f"stage state: {self.user_stats()}")
+          logger.error(f"imageSeenTime={imageSeenTime}, keydownTime={keydownTime}")
+          await self.set_user_data(finished=True, final_save=True)
+          logger.info("Stage finished due to missing data")
 
     await self.set_user_data(saved_data=True)
+    if self.verbosity:
+      logger.info("finished saving")
 
   @retry_with_exponential_backoff(max_retries=5, base_delay=1, max_delay=10)
   async def finish_stage(self):
@@ -543,7 +567,6 @@ class EnvStage(Stage):
     # save experiment data so far (prior time-step + resultant action)
     # if finished, save synchronously (to avoid race condition) with next stage
     await self.set_user_data(finished=True, final_save=True)
-    logger.info(f"finish_stage {self.name}. stats: {self.user_stats()}")
     imageSeenTime = await ui.run_javascript("getImageSeenTime()", timeout=10)
 
     start_notification = self.pop_user_data("start_notification")
@@ -563,24 +586,27 @@ class EnvStage(Stage):
       timestep=stage_state.timestep,
       user_stats=self.user_stats(),
     )
+    logger.info(f"finished stage '{self.name}'. stats: {self.user_stats()}")
 
   async def handle_key_press(self, event, container):
     # Get or create lock for this specific user
-    async with self.get_user_lock():
-      await self._handle_key_press(event, container)
+    # async with self.get_user_lock():
+    #  await self._handle_key_press(event, container)
 
-  async def _handle_key_press(self, event, container):
+    # async def _handle_key_press(self, event, container):
     key = event.args["key"]
-    logger.info(f"handle_key_press key: {key}")
+    if self.verbosity:
+      logger.info(f"handle_key_press key: {key}")
     if not self.get_user_data("started", False):
-      logger.info(f"key press '{key}' before started")
+      if self.verbosity:
+        logger.info(f"pressed '{key}' before started")
       return
     if self.get_user_data("stage_finished", False):
       # if already did final save, just return
       if self.get_user_data("final_save", False):
-        logger.info(f"key press '{key}' after final save")
+        if self.verbosity:
+          logger.info(f"pressed '{key}' after final save")
         return
-      logger.info(f"key press '{key}' finishing stage")
 
       # did not do final save, so do so now
       # want stage to end on keypress so that
@@ -593,11 +619,13 @@ class EnvStage(Stage):
       success_notification = self.pop_user_data("success_notification")
       if success_notification:
         success_notification.dismiss()
+      logger.info("finishing handle key press")
       return
 
     # check if valid environment interaction
     if key not in self.key_to_action:
-      logger.info(f"key press '{key}' not in key_to_action")
+      if self.verbosity:
+        logger.info(f"key press '{key}' not in key_to_action")
       return
 
     #############################
@@ -608,7 +636,9 @@ class EnvStage(Stage):
     # save prior timestep + current event information
     user_stats = self.user_stats()
     timestep = self.get_user_data("stage_state").timestep
-    await self.get_user_queue().put((event.args, timestep, user_stats))
+    processed_timestep = self.preprocess_timestep(timestep)
+    async with self.get_user_lock():
+      await self.get_user_queue().put((event.args, processed_timestep, user_stats))
     asyncio.create_task(self._process_save_queue())
 
     #############################
@@ -617,18 +647,16 @@ class EnvStage(Stage):
     if self.autoreset_on_done:
       if timestep.last():
         rng = new_rng()
-        logger.info("Resetting environment")
         timestep = self.web_env.reset(rng, self.env_params)
-        logger.info("finished resetting environment")
       else:
         action_idx = self.key_to_action[key]
         next_timesteps = self.get_user_data("next_timesteps")
-        timestep = jax.tree_map(lambda t: t[action_idx], next_timesteps)
+        timestep = jax.tree.map(lambda t: t[action_idx], next_timesteps)
     else:
       # use action to select from avaialble next time-steps
       action_idx = self.key_to_action[key]
       next_timesteps = self.get_user_data("next_timesteps")
-      timestep = jax.tree_map(lambda t: t[action_idx], next_timesteps)
+      timestep = jax.tree.map(lambda t: t[action_idx], next_timesteps)
 
     #############################
     # update stage variables
@@ -737,11 +765,230 @@ class EnvStage(Stage):
     pass  # do nothing
 
 
+
 @dataclasses.dataclass
-class Block:
-  stages: List[Stage]
+class MultiAgentEnvStage(EnvStage):
+    """A stage class for handling interactive multi-agent environment episodes.
+    
+    This class extends EnvStage to support environments with multiple agents,
+    where one agent is controlled by the user and the other by a model.
+    
+    Additional Args:
+        web_env (MultiAgentJaxWebEnv): The multi-agent environment instance.
+        model (Any): Optional model to control the non-human agent.
+        model_params (Any): Parameters for the model.
+        num_seeds (int): Number of model parameter seeds available.
+        init_hidden_state_fn (Any): Function to initialize the model's hidden state.
+        human_id (Optional[int]): ID of the human-controlled agent (0 or 1).
+        using_param_stack (bool): Whether model_params is a stack of parameters.
+    """
+    
+    web_env: MultiAgentJaxWebEnv = None
+    max_timesteps: Optional[int] = 100
+    model: Any = None
+    model_params: Any = None
+    num_seeds: int = 6
+    init_hidden_state_fn: Any = None
+    human_id: Optional[int] = None  # is agent 0 or agent 1
+    using_param_stack: bool = False
+    check_finished: Optional[TimestepCallFn] = None
+
+    def __post_init__(self):
+        super().__post_init__()
+        
+        if self.check_finished is None:
+            self.check_finished = lambda timestep: timestep.last()
+
+    async def step_and_send_timestep(
+            self,
+            container,
+            update_display: bool = True):
+        #############################
+        # get next images and store them client-side
+        # setup code to display next state
+        #############################
+        rng = new_rng()
+        timestep = self.get_user_data("stage_state").timestep
+        
+        # Get the other agent's action using the model if available
+        if self.model is not None:
+            all_obs = self.web_env.env._env.get_obs(timestep.state)
+            human_id = self.get_user_data('human_id')
+            if human_id == 0:
+                other_agent_obs = all_obs['agent_1']
+            else:
+                other_agent_obs = all_obs['agent_0']
+            other_agent_obs = other_agent_obs.flatten()
+            other_agent_obs = other_agent_obs[None] # add environment dimension
+            other_agent_obs = other_agent_obs[None] # add batch dimension
+            agent_pos = timestep.state.agent_pos.astype(jnp.int32)
+            agent_pos = agent_pos[None] # add environment dimension
+            agent_pos = agent_pos[None] # add batch dimension
+
+            prev_was_last = timestep.last()
+            sim_done = prev_was_last.astype(jnp.int32).reshape((1,1))
+
+            ac_input = (other_agent_obs, sim_done, agent_pos)
+            hidden_state = self.get_user_data('hidden_state')
+            model_index = self.get_user_data('model_index')  # if model param is a stack of params we only want one set
+            if self.using_param_stack:
+                model_params = jax.tree_map(lambda x: x[model_index], self.model_params)
+            else:
+                model_params = self.model_params
+            action_res = self.model.apply(model_params, hidden_state, ac_input)
+            hidden_state, pi = action_res[0], action_res[1]
+            await self.set_user_data(hidden_state=hidden_state)
+            other_agent_action = jnp.argmax(pi.probs, 2)[0]  # get max prob action
+            other_agent_action = other_agent_action.squeeze().astype(jnp.int32)
+        else:
+            other_agent_action = 4  # Default behavior if no model exists
+
+        # Get next timesteps with the other agent's action
+        next_timesteps = self.web_env.next_steps(
+            rng, timestep, self.env_params, 
+            other_action=other_agent_action, 
+            h_id=self.get_user_data('human_id'))
+            
+        next_images = self.vmap_render_fn(next_timesteps)
+        next_images = {
+            self.action_keys[idx]: base64_npimage(image) 
+            for idx, image in enumerate(next_images)
+        }
+
+        js_code = f"window.next_states = {next_images};"
+        ui.run_javascript(js_code)
+
+        await self.set_user_data(next_timesteps=next_timesteps)
+        
+        # Display image
+        if update_display:
+            await self.display_timestep(container, timestep)
+        else:
+            ui.run_javascript("window.imageSeenTime = window.next_imageSeenTime;", timeout=10)
+
+    async def activate(self, container: ui.element):
+        """Initialize the stage and set up the human agent ID if not specified."""
+        async with self.get_user_lock():
+            # Randomly assign human ID if not specified
+            rng = new_rng()
+            if self.human_id is None:
+                human_id = jax.random.randint(rng, (), 0, 2)
+                human_color = 'Red' if human_id == 0 else 'Blue'
+                await self.set_user_data(human_id=human_id)
+                await self.set_user_data(human_color=human_color)
+                rng = new_rng()
+            
+            # Initialize model if available
+            if self.model is not None:
+                hidden_state = self.init_hidden_state_fn()
+                await self.set_user_data(hidden_state=hidden_state)
+                
+                # Sample model index
+                model_index = np.random.randint(0, self.num_seeds)
+                await self.set_user_data(model_index=model_index)
+            
+            # Continue with standard activation
+            await super().activate(container)
+
+
+@dataclasses.dataclass
+class Block(Container):
+  stages: List[Stage] = dataclasses.field(default_factory=list)
   randomize: Union[bool, List[bool]] = False
   metadata: Dict[str, Any] = dataclasses.field(default_factory=dict)
+  name: str = None
+
+  def __len__(self):
+    return len(self.stages)
+
+  def __post_init__(self):
+    self._lock = Lock()  # Add lock for thread safety
+    self._user_locks = {}  # Dictionary to store per-user locks
+    if self.name is None:
+      self.name = f"block_{uuid.uuid4().hex}"
+
+    self.unique_id = f"block_{uuid.uuid4().hex}"
+    # Broadcast metadata
+    self.metadata["name"] = self.name
+    for stage in self.stages:
+      stage.metadata["block_metadata"] = self.metadata
+
+  # def get_block_data(self):
+  #  return app.storage.user.get(f"'{self.name}'_data", {})
+
+  # def get_user_data(self, key, value=None):
+  #  return self.get_block_data().get(key, value)
+
+  # async def set_user_data(self, **kwargs):
+  #  block_data = self.get_block_data()
+  #  block_data.update(kwargs)
+  #  async with self._lock:
+  #    app.storage.user[f"'{self.name}'_data"] = block_data
+
+  async def get_block_stage_idx(self):
+    stage_idx = self.get_user_data("stage_idx")
+    if stage_idx is None:
+      stage_idx = 0
+      await self.set_user_data(stage_idx=stage_idx)
+    return stage_idx
+
+  async def get_user_stage_order(self):
+    """This function prepares the order of stages in the block."""
+    if not self.randomize:
+      return list(range(len(self.stages)))
+    stage_order = self.get_user_data("stage_order")
+    if stage_order is not None:
+      return stage_order
+
+    # self.randomize = randomize = [False, False, False, True, True]
+    indices = jnp.arange(len(self.stages))
+    mask = jnp.array(self.randomize)
+
+    # Get randomizable indices
+    random_indices = indices[mask]
+
+    # Permute the randomizable indices
+    rng_key = new_rng()
+    rng_key, subkey = jax.random.split(rng_key)
+    random_indices = jax.random.permutation(subkey, random_indices)
+
+    # Combine back together
+    permuted = indices.at[mask].set(random_indices)
+
+    stage_order = [int(i) for i in permuted]
+    await self.set_user_data(stage_order=stage_order)
+    return stage_order
+
+  async def get_stage(self):
+    stage_idx = await self.get_block_stage_idx()
+    stage_order = await self.get_user_stage_order()
+    if stage_idx >= len(stage_order):
+      logger.info("Defaulting to final stage")
+      stage_idx = len(stage_order) - 1
+    stage = self.stages[stage_order[stage_idx]]
+    app.storage.user["stage_name"] = stage.name
+    return stage
+
+  async def advance_stage(self):
+    stage_idx = await self.get_block_stage_idx()
+    await self.set_user_data(stage_idx=stage_idx + 1)
+
+  async def not_finished(self):
+    stage_idx = await self.get_block_stage_idx()
+    return stage_idx < len(self.stages)
+
+
+def broadcast_metadata(blocks: List[Block]) -> List[Stage]:
+  """This function assigns the block metadata to each stage."""
+  # assign block description to each stage description
+  for block_idx, block in enumerate(blocks):
+    for stage in block.stages:
+      block.metadata.update(idx=block_idx)
+      stage.metadata["block_metadata"] = block.metadata
+
+
+def nstages(blocks: List[Block]) -> int:
+  return sum(len(block.stages) for block in blocks)
 
 
 def prepare_blocks(blocks: List[Block]) -> List[Stage]:
@@ -749,13 +996,13 @@ def prepare_blocks(blocks: List[Block]) -> List[Stage]:
   It also flattens all blocks into a single list of stages.
   """
   # assign block description to each stage description
+  all_stages = []
   for block_idx, block in enumerate(blocks):
     for stage in block.stages:
       block.metadata.update(idx=block_idx)
       stage.metadata["block_metadata"] = block.metadata
-
-  # flatten all blocks
-  return [stage for block in blocks for stage in block.stages]
+      all_stages.append(stage)
+  return all_stages
 
 
 def generate_stage_order(

@@ -110,12 +110,17 @@ class DataFrame(object):
     """
     new_rows = []
     new_episodes = []
+
+    # Define schema explicitly based on the original dataframe
+    schema = {col: self._df[col].dtype for col in self._df.columns}
+
     for idx, row in enumerate(self._df.iter_rows(named=True)):
       if not episode_filter(self.episodes[idx]):
         new_rows.append(row)
         new_episodes.append(self._episodes[idx])
 
-    new_df = pl.DataFrame(new_rows)
+    # Use the explicit schema when creating the new dataframe
+    new_df = pl.DataFrame(new_rows, schema=schema)
     return DataFrame(df=new_df, episodes=new_episodes, index_key=self._index_key)
 
   def filter_by_group(
