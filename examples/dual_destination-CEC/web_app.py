@@ -146,7 +146,7 @@ async def init_db() -> None:
         db_url=f'sqlite://{DATA_DIR}/{DATABASE_FILE}',
         # this will look in models.py,
         # models.py uses defaults from nicewebrl
-        modules={'models': ['models']})
+        modules={"models": ["nicewebrl.stages"]})
     await Tortoise.generate_schemas()
 
 

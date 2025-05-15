@@ -83,7 +83,10 @@ init_hidden_state_fn = lambda : ScannedRNN.initialize_carry(1, base_config['GRU_
 
 # NiceWebRL exploits a `TimeStep` object for checking episode conditions
 # wrap environment in wrapper if needed
-jax_env = TimestepWrapper(jax_env, autoreset=True, reset_w_batch_dim=False)
+jax_env = TimestepWrapper(jax_env,
+ autoreset=True,
+ reset_w_batch_dim=False,
+ use_params=False)
 
 # create web environment wrapper
 jax_web_env = MultiAgentJaxWebEnv(
@@ -134,7 +137,7 @@ env_params = default_params
 def make_image_html(src):
     html = f'''
     <div id="stateImageContainer" style="display: flex; justify-content: center; align-items: center;">
-        <img id="stateImage" src="{src}" style="width: 50%; height: 50%; object-fit: contain;">
+        <img id="stateImage" src="{src}" style="width: 100%; height: 100%; object-fit: contain;">
     </div>
     '''
     return html
