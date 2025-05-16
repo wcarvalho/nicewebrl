@@ -22,27 +22,27 @@ pip install -e .
 <table>
   <thead>
     <tr>
-      <th style="width: 40%;">Description</th>
-      <th style="width: 20%;">Visualization</th>
-      <th style="width: 15%;">Installation</th>
-      <th style="width: 25%;">Run Command</th>
+      <th>Description</th>
+      <th>Visualization</th>
+      <th>Installation</th>
+      <th>Run Command</th>
     </tr>
   </thead>
   <tbody>
     <tr>
-      <td><a href="https://github.com/wcarvalho/multitask_preplay">Developing a novel Deep RL cognitive science model with NiceWebRL</a></td>
+      <td><b>Case study 1</b>: <a href="https://github.com/wcarvalho/multitask_preplay">Developing a novel Deep RL cognitive science model with NiceWebRL</a></td>
       <td><img src="assets/preplay.png" width="120"/></td>
       <td></td>
       <td>see <a href="https://github.com/wcarvalho/multitask_preplay">Paper Repo</a></td>
     </tr>
     <tr>
-      <td><a href="https://arxiv.org/abs/2504.12714">Developing a novel MARL algorithm for coordinating with humans with NiceWebRL</a></td>
+      <td><b>Case study 2</b>: <a href="https://arxiv.org/abs/2504.12714">Developing a novel MARL algorithm for coordinating with humans with NiceWebRL</a></td>
       <td><img src="assets/cec.png" width="120"/></td>
       <td>follow instructions in <code>examples/overcooked-CEC</code></td>
       <td><code>cd examples/overcooked-CEC; python web_app.py 'counter_circuit'</code></td>
     </tr>
     <tr>
-      <td>Developing an LLM-assistant for sequential-decision making tasks in a virtual environment.</td>
+      <td><b>Case study 3</b>: Developing an LLM-assistant for sequential-decision making tasks in a virtual environment.</td>
       <td><img src="assets/xland_minigrid.gif" width="120"/></td>
       <td><code>pip install -e ".[xland-assistant]"</code></td>
       <td><code>cd examples/xland-LLM-assistant; python web_app_assistant.py</code></td>
@@ -55,40 +55,46 @@ pip install -e .
 <table>
   <thead>
     <tr>
-      <th style="width: 40%;">Description</th>
-      <th style="width: 20%;">Visualization</th>
-      <th style="width: 15%;">Installation</th>
-      <th style="width: 25%;">Run Command</th>
+      <th>Description</th>
+      <th>Visualization</th>
+      <th>Installation</th>
+      <th>Run Command</th>
     </tr>
   </thead>
   <tbody>
     <tr>
-      <td>Single-agent 2D Minecraft domain</td>
+      <td> 2D Minecraft domain (single agent)</td>
       <td><img src="assets/craftax.gif" width="120"/></td>
       <td><code>pip install -e ".[craftax]"</code></td>
       <td><code>cd examples/craftax; python web_app.py</code></td>
     </tr>
     <tr>
-      <td>GridWorld environment for reinforcement learning with PPO implementation</td>
+      <td>Minigrid (single agent, has PPO implementation)</td>
       <td><img src="assets/navix.gif" width="120"/></td>
       <td><code>pip install -e ".[craftax]"</code></td>
       <td><code>cd examples/minigrid-ppo; python web_app.py</code></td>
     </tr>
     <tr>
-      <td>Meta-RL tasks defined by dynamic rulesets</td>
+      <td>XLand-Minigrid (single agent)</td>
       <td><img src="assets/xland_minigrid.gif" width="120"/></td>
       <td><code>pip install -e ".[xland]"</code></td>
       <td><code>cd examples/xland-minigrid; python web_app.py</code></td>
     </tr>
     <tr>
-      <td>Minigrid environment with an LLM assistant for help</td>
+      <td>Minigrid with API-based LLM assistant</td>
       <td><img src="assets/navix.gif" width="120"/></td>
       <td><code>pip install -e ".[xland]"</code></td>
-      <td><code>cd examples/minigrid-LLM-assistant; python web_app.py</code></td>
+      <td><code>cd examples/minigrid-LLM-assistant; python web_app_Gemini.py</code></td>
+    </tr>
+    <tr>
+      <td>Minigrid with <b>local</b> LLM assistant</td>
+      <td><img src="assets/navix.gif" width="120"/></td>
+      <td><code>pip install -e ".[xland]"</code></td>
+      <td><code>cd examples/minigrid-LLM-assistant; python web_app_Local.py</code></td>
     </tr>
     <tr>
       <td>Multi-agent environment with cross-environmental coordination</td>
-      <td><img src="assets/jaxmarl.gif" width="120"/></td>
+      <td><img src="assets/dual-destination.png" width="120"/></td>
       <td><code>pip install -e ".[jaxmarl]"</code></td>
       <td><code>cd examples/dual_destination-human-AI-CEC; python web_app.py</code></td>
     </tr>
