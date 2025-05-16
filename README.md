@@ -3,7 +3,15 @@
 
 This repository is the official implementation of [NiceWebRL: a meta-environment for developing Human-like, Human-compatible, and Human-assistive AI](placeholder).
 
+**Table of Contents**
+
+* [Install](#install)
+* [Functional example folders](#working-examples)
+* [Other Jax environments compatible with NiceWebRL](#other-jax-environments-compatible-with-nicewebrl)
+
+
 NiceWebRL is a Python library for quickly making human subject experiments that leverage machine reinforcement learning environments.
+
 
 <img src="assets/human-ai-comparisons.png" alt="Comparison Image" style="width: 100%; max-width: 800px;">
 
@@ -123,43 +131,8 @@ We present three case studies for how NiceWebRL can help researchers develop eit
   </tbody>
 </table>
 
-## Running experiments
 
-### Example 1: Craftax
-We've provided an example of making a web app to have humans control a craftax agent in `examples/craftax`.
-
-<img src="https://raw.githubusercontent.com/MichaelTMatthews/Craftax/main/images/building.gif" alt="Craftax" style="width: 100%; max-width: 200px;">
-
-**(1) Install NiceWebRL with examples**
-```bash
-pip install "git+https://github.com/wcarvalho/NiceWebRL.git#egg=NiceWebRL[craftax]"
-# or 
-pip install -e ".[craftax]"
-```
-
-**(2) run the web app from the directory**
-```bash
-cd examples/crafter
-python web_app.py
-```
-**NOTE**: this will make a `data` and `.nicegui` folder which you can delete to remove user data.
-
-**COMING SOON**: Instructions for putting this on a remote server.
-
-### Example 2: Overcooked
-![Overcooked Environment](https://github.com/FLAIROx/JaxMARL/blob/main/docs/imgs/cramped_room.gif?raw=true)
-
-**Make sure you have CMake installed**
-```bash
-pip install "git+https://github.com/wcarvalho/NiceWebRL.git#egg=NiceWebRL[jaxmarl]"
-# or 
-pip install -e ".[jaxmarl]"
-
-cd examples/overcooked
-python web_app.py
-```
-
-## Jax environments
+## Other Jax environments compatible with NiceWebRL
 
 The following are all Jax environments which can be used with this framework to run human subject experiments. The power of using jax is that one can use the **exact** same environment for human subjects experiments as for developing modern machine learning algorithms (especially reinforcement learning algorithms).
 
