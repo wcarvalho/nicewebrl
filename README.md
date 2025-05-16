@@ -62,7 +62,7 @@ We present three case studies for how NiceWebRL can help researchers develop eit
       <td>see <a href="https://github.com/wcarvalho/multitask_preplay">Paper Repo</a></td>
     </tr>
     <tr>
-      <td><code>Overcooked CEC</code><br> <b>Case study 2 (Human-compatible AI)</b>: <a href="https://arxiv.org/abs/2504.12714">Developing a novel MARL algorithm for coordinating with humans with NiceWebRL</a> <br>[<a href="https://github.com/wcarvalho/nicewebrl/tree/main/examples/overcooked-CEC">folder</a>]</td>
+      <td><code>Cross Environment Cooperation</code><br> <b>Case study 2 (Human-compatible AI)</b>: <a href="https://arxiv.org/abs/2504.12714">Developing a novel MARL algorithm for coordinating with humans with NiceWebRL</a> <br>[<a href="https://github.com/wcarvalho/nicewebrl/tree/main/examples/overcooked-CEC">folder</a>]</td>
       <td><img src="assets/cec.png" width="120"/></td>
       <td>follow instructions in <code>examples/overcooked-CEC</code></td>
       <td><code>cd examples/overcooked-CEC; python web_app.py 'counter_circuit'</code></td>
