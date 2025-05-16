@@ -31,13 +31,13 @@ pip install -e .
   <tbody>
     <tr>
       <td><a href="https://github.com/wcarvalho/multitask_preplay">Developing a novel Deep RL cognitive science model with NiceWebRL</a></td>
-      <td></td>
+      <td><img src="assets/preplay.png" width="120"/></td>
       <td></td>
       <td>see <a href="https://github.com/wcarvalho/multitask_preplay">Paper Repo</a></td>
     </tr>
     <tr>
       <td><a href="https://arxiv.org/abs/2504.12714">Developing a novel MARL algorithm for coordinating with humans with NiceWebRL</a></td>
-      <td><img src="assets/jaxmarl.gif" width="120"/></td>
+      <td><img src="assets/cec.png" width="120"/></td>
       <td>follow instructions in <code>examples/overcooked-CEC</code></td>
       <td><code>python web_app.py 'counter_circuit'</code></td>
     </tr>
