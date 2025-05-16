@@ -1,7 +1,7 @@
 # NiceWebRL
 
 
-This repository is the official implementation of [NiceWebRL: a meta-environment for developing Human-like, Human-compatible, and Human-assistive AI](placeholder).
+This is the official repository of [NiceWebRL: a meta-environment for developing Human-like, Human-compatible, and Human-assistive AI](placeholder).
 
 **Table of Contents**
 
