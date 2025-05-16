@@ -63,19 +63,19 @@ pip install -e .
   </thead>
   <tbody>
     <tr>
-      <td> 2D Minecraft domain (single agent)</td>
+      <td> 2D Minecraft domain (single agent setting)</td>
       <td><img src="assets/craftax.gif" width="120"/></td>
       <td><code>pip install -e ".[craftax]"</code></td>
       <td><code>cd examples/craftax; python web_app.py</code></td>
     </tr>
     <tr>
-      <td>Minigrid (single agent, has PPO implementation)</td>
+      <td>Minigrid (single agent setting, has PPO implementation)</td>
       <td><img src="assets/navix.gif" width="120"/></td>
       <td><code>pip install -e ".[craftax]"</code></td>
       <td><code>cd examples/minigrid-ppo; python web_app.py</code></td>
     </tr>
     <tr>
-      <td>XLand-Minigrid (single agent)</td>
+      <td>XLand-Minigrid (single agent setting)</td>
       <td><img src="assets/xland_minigrid.gif" width="120"/></td>
       <td><code>pip install -e ".[xland]"</code></td>
       <td><code>cd examples/xland-minigrid; python web_app.py</code></td>
@@ -93,13 +93,13 @@ pip install -e .
       <td><code>cd examples/minigrid-LLM-assistant; python web_app_Local.py</code></td>
     </tr>
     <tr>
-      <td>Multi-agent environment with cross-environmental coordination</td>
+      <td>Dual Destination (Human-AI setting)</td>
       <td><img src="assets/dual-destination.png" width="120"/></td>
       <td><code>pip install -e ".[jaxmarl]"</code></td>
       <td><code>cd examples/dual_destination-human-AI-CEC; python web_app.py</code></td>
     </tr>
     <tr>
-      <td>Cooperative multi-agent cooking environment</td>
+      <td>Overcooked (Human-Human setting)</td>
       <td><img src="assets/jaxmarl.gif" width="120"/></td>
       <td><code>pip install -e ".[jaxmarl]"</code></td>
       <td><code>cd examples/overcooked-human-human; python web_app.py</code></td>
