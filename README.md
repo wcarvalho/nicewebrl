@@ -83,13 +83,13 @@ pip install -e .
     <tr>
       <td>Minigrid with API-based LLM assistant</td>
       <td><img src="assets/navix.gif" width="120"/></td>
-      <td><code>pip install -e ".[xland]"</code></td>
+      <td><code>pip install -e "."</code></td>
       <td><code>cd examples/minigrid-LLM-assistant; python web_app_Gemini.py</code></td>
     </tr>
     <tr>
       <td>Minigrid with <b>local</b> LLM assistant</td>
       <td><img src="assets/navix.gif" width="120"/></td>
-      <td><code>pip install -e ".[xland]"</code></td>
+      <td><code>pip install -e "."</code></td>
       <td><code>cd examples/minigrid-LLM-assistant; python web_app_Local.py</code></td>
     </tr>
     <tr>
