@@ -1,10 +1,20 @@
-# nicewebrl
+# NiceWebRL
 
 
-Python library for quickly making interactive RL Apps with [NiceGUI](https://nicegui.io/). It is particularly suited for hooking up [JAX](https://github.com/google/jax) based RL environments to web interfaces. JAX is useful for blazing fast iteration on AI algorithms. With this library, you can use the exact same environment for human subject experiments.
+This repository is the official implementation of [NiceWebRL: a meta-environment for developing Human-like, Human-compatible, and Human-assistive AI](placeholder).
+
+NiceWebRL is a Python library for quickly making human subject experiments that leverage machine reinforcement learning environments.
 
 <img src="assets/human-ai-comparisons.png" alt="Comparison Image" style="width: 100%; max-width: 800px;">
 
+NiceWebRL enables researchers to use the same environments both to train and evaluate virtual agents, and to train and evaluate humans.
+It supports both single-agent and multi-agent environments.
+As such, NiceWebRL enables AI researchers to easily compare their algorithms to human performance, cognitive scientists to test ML algorithms as theories for human cognition, and multi-agent researchers to develop algorithms for human-AI collaboration.
+
+To enable the use of machine learning environments in online experiments, it exploits [Jax](https://github.com/google/jax)—a high-performance numerical computing library—to reduce the latency from having clients communicate with a remote server.
+To enable easy experiment design, NiceWebRL exploits [NiceGUI](https://nicegui.io/) to enable sophisticated GUI design entirely in Python.
+
+To facilitate its adoption, we present several [working examples](#working-examples) that researchers can use to quickly set up their own experiments.
 ## Install
 
 ```bash
@@ -17,9 +27,14 @@ conda activate nicewebrl
 pip install -e .
 ```
 
-## Paper case studies
+## Working Examples
+### Paper case studies
 
-We present three case studies for how nicewebrl can help researchers develop either Human-like AI, Human-compatible AI, or Human-assistive AI.
+We present three case studies for how NiceWebRL can help researchers develop either Human-like AI, Human-compatible AI, or Human-assistive AI. The first two are from recent papers, 
+
+* [Preemptive Solving of Future Problems: Multitask Preplay in Humans and Machines](placeholder)
+* [Cross-environment Cooperation Enables Zero-shot Multi-agent Coordination](https://arxiv.org/abs/2504.12714)
+
 <table>
   <thead>
     <tr>
@@ -31,7 +46,7 @@ We present three case studies for how nicewebrl can help researchers develop eit
   </thead>
   <tbody>
     <tr>
-      <td><b>Case study 1 (Human-like AI)</b>: <a href="https://github.com/wcarvalho/multitask_preplay">Developing a novel Deep RL cognitive science model with NiceWebRL</a></td>
+      <td><b>Case study 1 (Human-like AI)</b>: <a href="placeholder">Developing a novel Deep RL cognitive science model with NiceWebRL</a></td>
       <td><img src="assets/preplay.png" width="120"/></td>
       <td></td>
       <td>see <a href="https://github.com/wcarvalho/multitask_preplay">Paper Repo</a></td>
@@ -115,9 +130,9 @@ We've provided an example of making a web app to have humans control a craftax a
 
 <img src="https://raw.githubusercontent.com/MichaelTMatthews/Craftax/main/images/building.gif" alt="Craftax" style="width: 100%; max-width: 200px;">
 
-**(1) Install nicewebrl with examples**
+**(1) Install NiceWebRL with examples**
 ```bash
-pip install "git+https://github.com/wcarvalho/nicewebrl.git#egg=nicewebrl[craftax]"
+pip install "git+https://github.com/wcarvalho/NiceWebRL.git#egg=NiceWebRL[craftax]"
 # or 
 pip install -e ".[craftax]"
 ```
@@ -136,7 +151,7 @@ python web_app.py
 
 **Make sure you have CMake installed**
 ```bash
-pip install "git+https://github.com/wcarvalho/nicewebrl.git#egg=nicewebrl[jaxmarl]"
+pip install "git+https://github.com/wcarvalho/NiceWebRL.git#egg=NiceWebRL[jaxmarl]"
 # or 
 pip install -e ".[jaxmarl]"
 
@@ -148,7 +163,7 @@ python web_app.py
 
 The following are all Jax environments which can be used with this framework to run human subject experiments. The power of using jax is that one can use the **exact** same environment for human subjects experiments as for developing modern machine learning algorithms (especially reinforcement learning algorithms).
 
-When targetting normative solutions, one may want to study algorithms asymptotic behavior with a lot of data. Jax makes it cheap to do this. nicewebrl makes it easy to compare these algorithms to human subject behavior.
+When targetting normative solutions, one may want to study algorithms asymptotic behavior with a lot of data. Jax makes it cheap to do this. NiceWebRL makes it easy to compare these algorithms to human subject behavior.
 <!--<table style="width:100%; border-collapse: collapse;">
   <tr style="max-height: 150px; overflow: hidden;">
     <td style="border: 1px solid black; padding: 10px; text-align: center;">
