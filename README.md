@@ -7,6 +7,8 @@ This repository is the official implementation of [NiceWebRL: a meta-environment
 
 * [Install](#install)
 * [Functional example folders](#working-examples)
+  * [Paper case studies](#paper-case-studies)
+  * [More examples](#more-examples)
 * [Other Jax environments compatible with NiceWebRL](#other-jax-environments-compatible-with-nicewebrl)
 
 
