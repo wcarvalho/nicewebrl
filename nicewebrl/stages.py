@@ -26,6 +26,14 @@ from nicewebrl.container import Container
 from nicewebrl import user_data_file
 
 
+try:
+  import jax.tree.map as jax_tree_map
+except ImportError:
+  import jax
+  jax_tree_map = jax.tree_map
+except:
+  raise ImportError("Failed to import jax.tree.map or jax.tree_map")
+
 FeedbackFn = Callable[[struct.PyTreeNode], Dict]
 
 
@@ -496,7 +504,7 @@ class EnvStage(Stage):
     timestep_data = {}
     if self.custom_data_fn is not None:
       timestep_data = self.custom_data_fn(timestep)
-      timestep_data = jax.tree.map(make_serializable, timestep_data)
+      timestep_data = jax_tree_map(make_serializable, timestep_data)
 
     serialized_timestep = serialization.to_bytes(timestep)
 
@@ -651,12 +659,12 @@ class EnvStage(Stage):
       else:
         action_idx = self.key_to_action[key]
         next_timesteps = self.get_user_data("next_timesteps")
-        timestep = jax.tree.map(lambda t: t[action_idx], next_timesteps)
+        timestep = jax_tree_map(lambda t: t[action_idx], next_timesteps)
     else:
       # use action to select from avaialble next time-steps
       action_idx = self.key_to_action[key]
       next_timesteps = self.get_user_data("next_timesteps")
-      timestep = jax.tree.map(lambda t: t[action_idx], next_timesteps)
+      timestep = jax_tree_map(lambda t: t[action_idx], next_timesteps)
 
     #############################
     # update stage variables
