@@ -1,9 +1,11 @@
 # nicewebrl
+
+
 Python library for quickly making interactive RL Apps with [NiceGUI](https://nicegui.io/). It is particularly suited for hooking up [JAX](https://github.com/google/jax) based RL environments to web interfaces. JAX is useful for blazing fast iteration on AI algorithms. With this library, you can use the exact same environment for human subject experiments.
 
 <img src="media/comparing.jpeg" alt="Comparison Image" style="width: 100%; max-width: 800px;">
 
-# Install
+## Install
 
 ```bash
 # pip install
@@ -15,8 +17,91 @@ conda activate nicewebrl
 pip install -e .
 ```
 
+## Paper case studies
 
-# Getting Started
+<table>
+  <thead>
+    <tr>
+      <th>Description</th>
+      <th>Visualization</th>
+      <th>Installation</th>
+      <th>Run Command</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><a href="https://github.com/wcarvalho/multitask_preplay">Developing a novel Deep RL cognitive science model with NiceWebRL</a></td>
+      <td></td>
+      <td></td>
+      <td>see <a href="https://github.com/wcarvalho/multitask_preplay">Paper Repo</a></td>
+    </tr>
+    <tr>
+      <td><a href="https://arxiv.org/abs/2504.12714">Developing a novel MARL algorithm for coordinating with humans with NiceWebRL</a></td>
+      <td><img src="assets/jaxmarl.gif" width="120"/></td>
+      <td>follow instructions in <code>examples/overcooked-CEC</code></td>
+      <td><code>python web_app.py 'counter_circuit'</code></td>
+    </tr>
+    <tr>
+      <td>Developing an LLM-assistant for sequential-decision making tasks in a virtual environment.</td>
+      <td><img src="assets/xland_minigrid.gif" width="120"/></td>
+      <td><code>pip install -e ".[xland-assistant]"</code></td>
+      <td><code>python web_app_assistant.py</code></td>
+    </tr>
+  </tbody>
+</table>
+
+
+### More examples
+<table>
+  <thead>
+    <tr>
+      <th>Description</th>
+      <th>Visualization</th>
+      <th>Installation</th>
+      <th>Run Command</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Single-agent 2D Minecraft domain</td>
+      <td><img src="assets/craftax.gif" width="120"/></td>
+      <td><code>pip install -e ".[craftax]"</code></td>
+      <td><code>cd examples/craftax; python web_app.py</code></td>
+    </tr>
+    <tr>
+      <td>GridWorld environment for reinforcement learning with PPO implementation</td>
+      <td><img src="assets/navix.gif" width="120"/></td>
+      <td><code>pip install -e ".[craftax]"</code></td>
+      <td><code>cd examples/minigrid-ppo; python web_app.py</code></td>
+    </tr>
+    <tr>
+      <td>Meta-RL tasks defined by dynamic rulesets</td>
+      <td><img src="assets/xland_minigrid.gif" width="120"/></td>
+      <td><code>pip install -e ".[xland]"</code></td>
+      <td><code>cd examples/xland-minigrid; python web_app.py</code></td>
+    </tr>
+    <tr>
+      <td>Minigrid environment with an LLM assistant for help</td>
+      <td><img src="assets/navix.gif" width="120"/></td>
+      <td><code>pip install -e ".[xland]"</code></td>
+      <td><code>cd examples/minigrid-LLM-assistant; python web_app.py</code></td>
+    </tr>
+    <tr>
+      <td>Multi-agent environment with cross-environmental coordination</td>
+      <td><img src="assets/jaxmarl.gif" width="120"/></td>
+      <td><code>pip install -e ".[jaxmarl]"</code></td>
+      <td><code>cd examples/dual_destination-human-AI-CEC; python web_app.py</code></td>
+    </tr>
+    <tr>
+      <td>Cooperative multi-agent cooking environment</td>
+      <td><img src="assets/jaxmarl.gif" width="120"/></td>
+      <td><code>pip install -e ".[jaxmarl]"</code></td>
+      <td><code>cd examples/overcooked-human-human; python web_app.py</code></td>
+    </tr>
+  </tbody>
+</table>
+
+## Running experiments
 
 ### Example 1: Craftax
 We've provided an example of making a web app to have humans control a craftax agent in `examples/craftax`.
@@ -52,12 +137,12 @@ cd examples/overcooked
 python web_app.py
 ```
 
-# Jax environments
+## Jax environments
 
 The following are all Jax environments which can be used with this framework to run human subject experiments. The power of using jax is that one can use the **exact** same environment for human subjects experiments as for developing modern machine learning algorithms (especially reinforcement learning algorithms).
 
 When targetting normative solutions, one may want to study algorithms asymptotic behavior with a lot of data. Jax makes it cheap to do this. nicewebrl makes it easy to compare these algorithms to human subject behavior.
-<table style="width:100%; border-collapse: collapse;">
+<!--<table style="width:100%; border-collapse: collapse;">
   <tr style="max-height: 150px; overflow: hidden;">
     <td style="border: 1px solid black; padding: 10px; text-align: center;">
       <a href="https://github.com/MichaelTMatthews/Craftax" target="_blank" style="text-decoration: none; color: inherit;">
@@ -117,7 +202,7 @@ When targetting normative solutions, one may want to study algorithms asymptotic
     </td>
   </tr>
 </table>
-
+-->
 
 
 
