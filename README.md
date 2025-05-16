@@ -38,7 +38,7 @@ pip install -e .
 ## Working Examples
 ### Paper case studies
 
-We present three case studies for how NiceWebRL can help researchers develop either Human-like AI, Human-compatible AI, or Human-assistive AI. The first two are from recent papers, 
+We present three case studies for how NiceWebRL can help researchers develop either Human-like AI, Human-compatible AI, or Human-assistive AI. The first two are from two recent papers:
 
 * [Preemptive Solving of Future Problems: Multitask Preplay in Humans and Machines](placeholder)
 * [Cross-environment Cooperation Enables Zero-shot Multi-agent Coordination](https://arxiv.org/abs/2504.12714)
