@@ -103,7 +103,7 @@ We present three case studies for how NiceWebRL can help researchers develop eit
     <tr>
       <td><code>Minigrid PPO</code><br> Minigrid (single agent setting, has PPO implementation) <br>[<a href="https://github.com/wcarvalho/nicewebrl/tree/main/examples/minigrid-ppo">folder</a>]</td>
       <td><img src="assets/navix.gif" width="120"/></td>
-      <td><code>pip install -e ".[craftax]"</code></td>
+      <td><code>pip install -e "."</code></td>
       <td><code>cd examples/minigrid-ppo; python web_app.py</code></td>
     </tr>
     <tr>
