@@ -69,16 +69,16 @@ pip install -e .
       <td><code>cd examples/craftax; python web_app.py</code></td>
     </tr>
     <tr>
-      <td>Minigrid (single agent setting, has PPO implementation)</td>
-      <td><img src="assets/navix.gif" width="120"/></td>
-      <td><code>pip install -e ".[craftax]"</code></td>
-      <td><code>cd examples/minigrid-ppo; python web_app.py</code></td>
-    </tr>
-    <tr>
       <td>XLand-Minigrid (single agent setting)</td>
       <td><img src="assets/xland_minigrid.gif" width="120"/></td>
       <td><code>pip install -e ".[xland]"</code></td>
       <td><code>cd examples/xland-minigrid; python web_app.py</code></td>
+    </tr>
+    <tr>
+      <td>Minigrid (single agent setting, has PPO implementation)</td>
+      <td><img src="assets/navix.gif" width="120"/></td>
+      <td><code>pip install -e ".[craftax]"</code></td>
+      <td><code>cd examples/minigrid-ppo; python web_app.py</code></td>
     </tr>
     <tr>
       <td>Minigrid with API-based LLM assistant</td>
