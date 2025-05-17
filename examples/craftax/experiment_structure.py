@@ -13,6 +13,7 @@ import nicewebrl
 from nicewebrl import JaxWebEnv, base64_npimage, TimeStep, TimestepWrapper
 from nicewebrl import Stage, EnvStage
 from nicewebrl import get_logger
+from nicewebrl.experiment import SimpleExperiment
 
 
 logger = get_logger(__name__)
@@ -85,7 +86,7 @@ async def instruction_display_fn(stage, container):
     )
 
 
-instruction_stage = Stage(name="Instuctions", display_fn=instruction_display_fn)
+instruction_stage = Stage(name="Instructions", display_fn=instruction_display_fn)
 all_stages.append(instruction_stage)
 
 
@@ -164,3 +165,8 @@ environment_stage = EnvStage(
   ),
 )
 all_stages.append(environment_stage)
+
+experiment = SimpleExperiment(
+  stages=all_stages,
+  name="Craftax Demo"
+)
