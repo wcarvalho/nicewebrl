@@ -111,7 +111,7 @@ def describe_ruleset(ruleset) -> str:
 
 def create_env_with_ruleset(ruleset_key):
   env, env_params = xminigrid.make("XLand-MiniGrid-R1-9x9")
-  benchmark = xminigrid.load_benchmark(name="medium-1m")
+  benchmark = xminigrid.load_benchmark(name="trivial-1m")
   rule = benchmark.sample_ruleset(jax.random.key(ruleset_key))
   rule_text = describe_ruleset(rule)
 

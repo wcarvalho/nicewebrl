@@ -377,7 +377,7 @@ async def start_experiment(meta_container, stage_container, llm_container):
   with llm_container:
     ui.markdown("## 💬 Chat with AI Assistant")
     chat_input = (
-      ui.input(placeholder="Ask for hints or clues...")
+      ui.input(placeholder="Try asking what the goal is...")
       .style("width: 100%; margin-bottom: 10px;")
       .props("id=chat-input")
     )

@@ -1,0 +1,53 @@
+"ENV_NAME": "overcooked"  # ToyCoop or overcooked
+"LR": 3e-4
+"NUM_ENVS": 128
+"NUM_SEEDS": 1
+"NUM_STEPS": 256
+"FC_DIM_SIZE": 256
+"GRU_HIDDEN_DIM": 256
+"TOTAL_TIMESTEPS": 1e6
+"MAX_TRAIN_STEPS": 2e9
+"UPDATE_EPOCHS": 4
+"NUM_MINIBATCHES": 2
+"GAMMA": 0.99
+"GAE_LAMBDA": 0.95
+"CLIP_EPS": 0.2
+"SCALE_CLIP_EPS": False
+"ENT_COEF": 0.005
+"VF_COEF": 1.0
+"MOA_COEF": 1.0
+"MAX_GRAD_NORM": 0.5
+"ACTIVATION": "relu"
+"ANNEAL_LR": True
+"SEED": 0
+"ENV_KWARGS": 
+  "random_reset" : False # relevant for which env to train/test on. If true, it is IK
+  "max_steps": 256
+  # toy specific kwargs
+  "debug": False
+  # overcooked specific kwargs
+  "check_held_out": False  # if false, we don't check if the reset env is held out
+  "shuffle_inv_and_pot": False # if true, we shuffle pot status and inventory
+  "layout": "counter_circuit_9"
+  "random_reset_fn": "reset_all"  # reset_all or reset_counter_circuit
+"TRAINING": True
+"TRAIN_KWARGS":
+  "ckpt_id": 0 # loads from ckpt_id - 1 if available
+  "overwrite_ckpt": False # if true, will overwrite ckpt_id
+  "finetune": False # if true, load from opposing paradigm and cut learning rate by 10x
+  "e3t_beta": 0.55  # how much randomness to add to probabilities of one partner. If 0 then it's completely uniform, if 1 then it's same as original, if higher than 1 we're magnifying the extremes
+"TEST_KWARGS":
+  "beta": 1.0
+  "argmax": False  # otherwise we sample from policy
+  "num_trajs": 100
+  "plot": False  # if true, will get precedence over saving data
+  "self_play": False  # get's full cross play matrix
+  "ik": False # relevant to which model to load (ik vs sk)
+  "debug": False
+  "use_ckpt": True  # if true, will load from ckpt_id, otherwise will load from latest
+"GRAPH_NET": True
+"FCP": False
+# WandB Params
+"ENTITY": "social-rl"                                          
+"PROJECT": "InfiniteKitchen"
+"WANDB_MODE" : "disabled"
