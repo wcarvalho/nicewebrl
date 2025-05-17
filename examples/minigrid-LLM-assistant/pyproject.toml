@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "minigrid-navix-web-app"
+version = "0.1.0"
+authors = [
+    { name = "Wilka Carvalho", email = "wcarvalho92@gmail.com" },
+]
+description = "Navix Minigrid 8x8 Empty"
+readme = "README.md"
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "nicegui",
+    "fastapi>=0.68.0",
+    "tortoise-orm",
+    "aiosqlite==0.19.0",
+    "jax>=0.4.16,<=0.4.22",
+    "jaxlib>=0.4.16,<=0.4.22",
+    "httpx>=0.24.0",
+    "uvicorn>=0.15.0",
+    "xminigrid>=0.1.0",
+    "Pillow",
+    "distrax>=0.1.5",
+    "flax>=0.8.2",
+    "numpy>=1.26.4,<2",
+    "polars",
+    "aiofiles>=23.2.1",
+    "msgpack>=1.0.5",
+    "tqdm",
+    "ipdb",
+    "craftax",
+    "python-dotenv",
+    "navix",
+    "nicewebrl @ git+https://github.com/wcarvalho/nicewebrl.git"
+]
+
+[project.urls]
+"Homepage" = "https://github.com/wcarvalho/nicewebrl"
+"Bug Tracker" = "https://github.com/wcarvalho/nicewebrl/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["*"]
+exclude = []
+
+[tool.setuptools.package-data]
+"*" = ["*.js"]
