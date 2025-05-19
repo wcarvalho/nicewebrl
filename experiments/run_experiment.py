@@ -307,32 +307,3 @@ def run(
                     await start_experiment(display_container, stage_container, on_termination_fn)
 
     ui.run(storage_secret=storage_secret, host=host, port=port, reload=reload, title=title)
-
-if __name__ in {"__main__", "__mp_main__"}:
-    print("--- This is a test run of nicewebrl/run_experiment.py ---")
-    print("For this test to function fully, ensure that:")
-    print("1. `nicewebrl` package is in PYTHONPATH.")
-    print("2. `nicewebrl.experiment.SimpleExperiment` is defined as per your specifications.")
-    print("3. `nicewebrl.utils.get_user_lock` is implemented.")
-    print("----------------------------------------------------------")
-
-    def _example_startup_sync():
-        print("SYNC Global SCRIPT startup function called!")
-
-    async def _example_termination_async():
-        # This function is called when the experiment flow for a user finishes.
-        # It's a good place for per-user cleanup or final data saving.
-        user_id = app.storage.user.get("seed", "unknown_user_at_termination")
-        print(f"ASYNC User-specific termination function called for user {user_id}!")
-        await asyncio.sleep(0.1) # Simulate async work
-        print(f"ASYNC User-specific termination function for {user_id} finished.")
-
-
-    run(
-        storage_secret="a_very_secret_key_for_testing_only_12345",
-        experiment_file="examples/craftax/experiment_structure.py",
-        title="Test Run: NiceWebRL General Experiment",
-        reload=False, 
-        on_startup_fn=_example_startup_sync,
-        on_termination_fn=_example_termination_async,
-    )
