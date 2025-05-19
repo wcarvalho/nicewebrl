@@ -1,4 +1,4 @@
-from nicewebrl.run_experiment import run
+import nicewebrl
 import os
 from importlib.util import find_spec
 import shutil
@@ -28,7 +28,7 @@ def restore_texture_cache_if_needed():
   else:
     print(f"{TEXTURE_CACHE_FILE} already exists.")
 
-run(
+nicewebrl.run(
     storage_secret="a_very_secret_key_for_testing_only_12345",
     experiment_file="examples/craftax/experiment_structure.py",
     title="NiceWebRL Craftax Experiment",
